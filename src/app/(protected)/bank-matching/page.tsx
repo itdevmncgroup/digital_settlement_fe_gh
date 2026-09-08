@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { api, ApiError, uploadFile } from '@/lib/api';
 import { formatDate, formatDateTime } from '@/lib/date';
 import { usePagination } from '@/lib/usePagination';
+import Modal from '@/components/Modal';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
 
@@ -136,8 +137,7 @@ function BankMatchingPageInner() {
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [forceRescan, setForceRescan] = useState(false);
-  const [scanNotice, setScanNotice] = useState('');
+  const [duplicateConfirm, setDuplicateConfirm] = useState<{ fileName: string; resolve: (rescan: boolean) => void } | null>(null);
   const [batchSearch, setBatchSearch] = useState('');
   const [batchSearchInput, setBatchSearchInput] = useState('');
   const [txnSearch, setTxnSearch] = useState('');
@@ -180,27 +180,35 @@ function BankMatchingPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // Resolves once the user picks IYA (true) or TIDAK (false) in the modal below
+  // - lets the sequential upload loop `await` a per-file decision instead of
+  // needing a separate confirm component with its own state machine.
+  const confirmRescan = (fileName: string): Promise<boolean> =>
+    new Promise((resolve) => setDuplicateConfirm({ fileName, resolve }));
+
   // Uploads each PDF one at a time (the endpoint only takes one file per call) so a
   // Finance user can drop a whole batch of bank settlement PDFs at once. A file
-  // whose content was already scanned before is *not* reparsed - the backend just
-  // hands back the existing batch (alreadyScanned: true) - unless "Scan ulang" is
-  // checked, which forces a full rebuild of that same batch.
+  // whose content was already scanned before is *not* reparsed automatically -
+  // instead the user is asked per file: IYA re-scans the PDF from scratch
+  // (?force=true, same full rebuild as before); TIDAK skips the scan but still
+  // re-runs matching against current Expense data via the new rematch endpoint.
   const onUpload = async (files: File[]) => {
     setUploading(true);
     setError('');
-    setScanNotice('');
     let lastBatch: BatchDetail | null = null;
-    const reusedNames: string[] = [];
     try {
       for (const file of files) {
-        lastBatch = (await uploadFile('/bank-settlements', file, forceRescan ? '?force=true' : '')) as BatchDetail;
-        if (lastBatch.alreadyScanned) reusedNames.push(file.name);
+        let result = (await uploadFile('/bank-settlements', file)) as BatchDetail;
+        if (result.alreadyScanned) {
+          const rescan = await confirmRescan(file.name);
+          result = rescan
+            ? ((await uploadFile('/bank-settlements', file, '?force=true')) as BatchDetail)
+            : ((await api.post(`/bank-settlements/${result.id}/rematch`)) as BatchDetail);
+        }
+        lastBatch = result;
       }
       loadBatches();
       if (lastBatch) setSelectedBatch(lastBatch);
-      if (reusedNames.length > 0) {
-        setScanNotice(`${reusedNames.join(', ')} sudah pernah discan sebelumnya - menampilkan hasil yang ada.`);
-      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Upload failed');
       loadBatches();
@@ -240,10 +248,6 @@ function BankMatchingPageInner() {
       <div className="toolbar">
         <h1>Auto Matching</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
-            <input type="checkbox" checked={forceRescan} onChange={(e) => setForceRescan(e.target.checked)} style={{ width: 'auto' }} />
-            Scan ulang meski file sudah pernah discan
-          </label>
           <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
             {uploading ? 'Uploading...' : '+ Upload Bank Settlement (PDF, bisa lebih dari 1)'}
             <input
@@ -266,10 +270,39 @@ function BankMatchingPageInner() {
       </p>
 
       {error && <div className="error-text">{error}</div>}
-      {scanNotice && (
-        <div className="card" style={{ marginBottom: 12, fontSize: 13 }}>
-          {scanNotice}
-        </div>
+
+      {duplicateConfirm && (
+        <Modal
+          title="File sudah pernah discan"
+          onClose={() => {
+            duplicateConfirm.resolve(false);
+            setDuplicateConfirm(null);
+          }}
+        >
+          <p style={{ fontSize: 13, marginTop: 0 }}>
+            {duplicateConfirm.fileName}: file sudah pernah discan, apakah ingin scan ulang atau tidak?
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className="btn"
+              onClick={() => {
+                duplicateConfirm.resolve(false);
+                setDuplicateConfirm(null);
+              }}
+            >
+              TIDAK
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                duplicateConfirm.resolve(true);
+                setDuplicateConfirm(null);
+              }}
+            >
+              IYA
+            </button>
+          </div>
+        </Modal>
       )}
 
       <div style={{ display: 'flex', gap: 16 }}>

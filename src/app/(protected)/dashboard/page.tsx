@@ -26,7 +26,6 @@ interface GroupRow {
 interface PodRow {
   id: string;
   name: string;
-  sales: string;
   totalExpense: number;
   transactionCount: number;
 }
@@ -220,7 +219,6 @@ export default function DashboardPage() {
               <thead>
                 <tr>
                   <th>POD</th>
-                  <th>Sales</th>
                   <th>Transactions</th>
                   <th>Total</th>
                 </tr>
@@ -229,14 +227,13 @@ export default function DashboardPage() {
                 {podPagination.pageRows.map((row) => (
                   <tr key={row.id}>
                     <td>{row.name}</td>
-                    <td>{row.sales}</td>
                     <td>{row.transactionCount}</td>
                     <td>{formatCurrency(Number(row.totalExpense))}</td>
                   </tr>
                 ))}
                 {byPod.length === 0 && (
                   <tr>
-                    <td colSpan={4} style={{ color: 'var(--muted)' }}>No data</td>
+                    <td colSpan={3} style={{ color: 'var(--muted)' }}>No data</td>
                   </tr>
                 )}
               </tbody>

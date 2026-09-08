@@ -21,7 +21,18 @@ interface NavGroup {
 }
 
 const NAV: NavGroup[] = [
-  { section: 'Dashboard', items: [{ href: '/dashboard', label: 'Dashboard', icon: 'dashboard', roles: ['ADMIN', 'FINANCE', 'MANAGEMENT'] }] },
+  {
+    section: 'Dashboard',
+    items: [
+      {
+        href: '/dashboard',
+        label: 'Dashboard',
+        icon: 'dashboard',
+        roles: ['ADMIN', 'FINANCE', 'MANAGEMENT'],
+        permissions: ['dashboard.read.all', 'dashboard.read.ownpod'],
+      },
+    ],
+  },
   {
     section: 'Transaction',
     items: [

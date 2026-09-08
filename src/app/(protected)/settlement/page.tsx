@@ -63,9 +63,9 @@ interface GeneratedExpenseRow {
   sales: { name: string };
 }
 
-interface GenerateResult {
-  settlement: { id: string; settlementNo: string; totalAmount: string; pod: { name: string } } | null;
+interface PreviewResult {
   expenses: GeneratedExpenseRow[];
+  existingDraftSettlement: { id: string; settlementNo: string } | null;
 }
 
 function formatCurrency(value: string | number) {
@@ -107,8 +107,17 @@ export default function SettlementPage() {
   const [genToDate, setGenToDate] = useState(defaultToDate);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState('');
-  const [generateResult, setGenerateResult] = useState<GenerateResult | null>(null);
+  const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
   const [selectedExpenseIds, setSelectedExpenseIds] = useState<Set<string>>(new Set());
+  const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false);
+  const [submittingSettlement, setSubmittingSettlement] = useState(false);
+
+  const [addModalSettlement, setAddModalSettlement] = useState<SettlementRow | null>(null);
+  const [eligibleExpenses, setEligibleExpenses] = useState<GeneratedExpenseRow[]>([]);
+  const [eligibleLoading, setEligibleLoading] = useState(false);
+  const [addSelectedIds, setAddSelectedIds] = useState<Set<string>>(new Set());
+  const [addError, setAddError] = useState('');
+  const [adding, setAdding] = useState(false);
 
   const load = () => {
     const qs = podFilter ? `?podId=${podFilter}` : '';
@@ -161,14 +170,16 @@ export default function SettlementPage() {
     setGenFromDate(defaultFromDate());
     setGenToDate(defaultToDate());
     setGenerateError('');
-    setGenerateResult(null);
+    setPreviewResult(null);
     setSelectedExpenseIds(new Set());
+    setShowDuplicateConfirm(false);
     setShowGenerateModal(true);
   };
 
-  // Scopes Settlement creation to one POD + one date range (instead of grabbing
-  // every eligible POD at once) - assigns the new settlementId to every matching,
-  // fully-APPROVED, not-yet-settled Expense, then lists them below for review.
+  // Preview-only: scopes the search to one POD + one date range (instead of
+  // grabbing every eligible POD at once) and lists the matching, already
+  // SETTLED/bank-matched Expenses for review - nothing is created yet, that's
+  // the Submit step below (createNewSettlement / addSelectionToExisting).
   const generateSettlement = async () => {
     if (!genPodId) {
       setGenerateError('Pilih POD terlebih dahulu.');
@@ -176,15 +187,15 @@ export default function SettlementPage() {
     }
     setGenerating(true);
     setGenerateError('');
+    setShowDuplicateConfirm(false);
     try {
-      const result = await api.post<GenerateResult>('/settlements/generate', {
+      const result = await api.post<PreviewResult>('/settlements/generate', {
         podId: genPodId,
         fromDate: genFromDate,
         toDate: genToDate,
       });
-      setGenerateResult(result);
+      setPreviewResult(result);
       setSelectedExpenseIds(new Set(result.expenses.map((e) => e.id)));
-      load();
     } catch (err) {
       setGenerateError(err instanceof ApiError ? err.message : 'Generate Settlement failed');
     } finally {
@@ -199,6 +210,86 @@ export default function SettlementPage() {
       else next.add(id);
       return next;
     });
+
+  // Submit: if a DRAFT settlement already covers this POD, ask "Buat baru" vs
+  // "Tambahkan" before committing anything; otherwise there's nothing to
+  // conflict with, so create the new settlement straight away.
+  const submitSettlement = () => {
+    if (selectedExpenseIds.size === 0) return;
+    if (previewResult?.existingDraftSettlement) {
+      setShowDuplicateConfirm(true);
+      return;
+    }
+    createNewSettlement();
+  };
+
+  const createNewSettlement = async () => {
+    setSubmittingSettlement(true);
+    setGenerateError('');
+    try {
+      await api.post('/settlements/from-selection', { podId: genPodId, expenseIds: Array.from(selectedExpenseIds) });
+      setShowGenerateModal(false);
+      load();
+    } catch (err) {
+      setGenerateError(err instanceof ApiError ? err.message : 'Failed to create settlement');
+    } finally {
+      setSubmittingSettlement(false);
+    }
+  };
+
+  const addSelectionToExisting = async () => {
+    if (!previewResult?.existingDraftSettlement) return;
+    setSubmittingSettlement(true);
+    setGenerateError('');
+    try {
+      await api.post(`/settlements/${previewResult.existingDraftSettlement.id}/expenses`, { expenseIds: Array.from(selectedExpenseIds) });
+      setShowGenerateModal(false);
+      load();
+    } catch (err) {
+      setGenerateError(err instanceof ApiError ? err.message : 'Failed to add expenses');
+    } finally {
+      setSubmittingSettlement(false);
+    }
+  };
+
+  // Lets a Sales/back-office user keep growing an already-created DRAFT
+  // Settlement as more of that POD's Expenses become SETTLED/matched, instead
+  // of only ever bundling them into a brand-new one via "Create Settlement".
+  const openAddExpensesModal = (r: SettlementRow) => {
+    setAddModalSettlement(r);
+    setAddSelectedIds(new Set());
+    setAddError('');
+    setEligibleExpenses([]);
+    setEligibleLoading(true);
+    api
+      .get<GeneratedExpenseRow[]>(`/settlements/${r.id}/eligible-expenses`)
+      .then(setEligibleExpenses)
+      .catch((err) => setAddError(err instanceof ApiError ? err.message : 'Failed to load eligible expenses'))
+      .finally(() => setEligibleLoading(false));
+  };
+
+  const toggleAddSelected = (id: string) =>
+    setAddSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const submitAddExpenses = async () => {
+    if (!addModalSettlement || addSelectedIds.size === 0) return;
+    setAdding(true);
+    setAddError('');
+    try {
+      await api.post(`/settlements/${addModalSettlement.id}/expenses`, { expenseIds: Array.from(addSelectedIds) });
+      setAddModalSettlement(null);
+      load();
+    } catch (err) {
+      setAddError(err instanceof ApiError ? err.message : 'Failed to add expenses');
+    } finally {
+      setAdding(false);
+    }
+  };
 
   const rejectTxn = async (transactionId: string) => {
     setBusy(true);
@@ -316,7 +407,12 @@ export default function SettlementPage() {
                   <td>
                     <span className={`badge ${r.status === 'COMPLETE' ? 'badge-success' : 'badge-info'}`}>{r.status}</span>
                   </td>
-                  <td>
+                  <td style={{ display: 'flex', gap: 8 }}>
+                    {canGenerate && r.status === 'DRAFT' && (
+                      <button className="btn" disabled={busy} onClick={() => openAddExpensesModal(r)}>
+                        Add Expenses
+                      </button>
+                    )}
                     {canManage && r.status === 'DRAFT' && (
                       <button className="btn btn-primary" disabled={busy} onClick={() => markComplete(r.id)}>
                         Mark Complete
@@ -416,11 +512,11 @@ export default function SettlementPage() {
               popover calendar (~300px tall) has space to render before Modal's
               shrink-wrapped card - overflow: hidden - clips anything past its
               own bounds; without this the popover got cut off. Kept even once
-              generateResult comes back with zero expenses (no table to fill
+              previewResult comes back with zero expenses (no table to fill
               the space) so the popup doesn't visibly shrink on a "not found"
               result - only a populated table (which already exceeds 480px)
               drops the floor. */}
-          <div style={{ minHeight: !generateResult || generateResult.expenses.length === 0 ? 480 : undefined }}>
+          <div style={{ minHeight: !previewResult || previewResult.expenses.length === 0 ? 480 : undefined }}>
             <div className="form-grid">
               <div className="form-row">
                 <label>POD</label>
@@ -450,69 +546,154 @@ export default function SettlementPage() {
             </button>
           </div>
 
-          {generateResult && (
+          {previewResult && (
             <div style={{ marginTop: 20 }}>
-              {generateResult.settlement ? (
-                <p style={{ fontSize: 13 }}>
-                  Created <strong>{generateResult.settlement.settlementNo}</strong> ({generateResult.settlement.pod.name},{' '}
-                  {formatCurrency(generateResult.settlement.totalAmount)}) - {generateResult.expenses.length} expense(s) assigned.
-                </p>
-              ) : (
+              {previewResult.expenses.length === 0 ? (
                 <p style={{ fontSize: 13, color: 'var(--muted)' }}>
                   Tidak ada expense yang cocok (POD/tanggal/sudah matched) untuk dibuatkan settlement.
                 </p>
-              )}
-
-              {generateResult.expenses.length > 0 && (
-                <table>
-                  <thead>
-                    <tr>
-                      <th style={{ width: 28 }}>
-                        <input
-                          type="checkbox"
-                          style={{ width: 'auto' }}
-                          checked={selectedExpenseIds.size === generateResult.expenses.length}
-                          onChange={(e) =>
-                            setSelectedExpenseIds(e.target.checked ? new Set(generateResult.expenses.map((x) => x.id)) : new Set())
-                          }
-                        />
-                      </th>
-                      <th>Expense No</th>
-                      <th>Date</th>
-                      <th>Sales</th>
-                      <th>Purpose</th>
-                      <th>Amount</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {generateResult.expenses.map((e) => (
-                      <tr key={e.id}>
-                        <td>
+              ) : (
+                <>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th style={{ width: 28 }}>
                           <input
                             type="checkbox"
                             style={{ width: 'auto' }}
-                            checked={selectedExpenseIds.has(e.id)}
-                            onChange={() => toggleSelectedExpense(e.id)}
+                            checked={selectedExpenseIds.size === previewResult.expenses.length}
+                            onChange={(e) =>
+                              setSelectedExpenseIds(e.target.checked ? new Set(previewResult.expenses.map((x) => x.id)) : new Set())
+                            }
                           />
-                        </td>
-                        <td>
-                          <Link href={`/expenses/${e.id}`}>{e.expenseNo}</Link>
-                        </td>
-                        <td>{formatDate(e.expenseDate)}</td>
-                        <td>{e.sales?.name}</td>
-                        <td>{e.purpose}</td>
-                        <td>{formatCurrency(e.amount)}</td>
-                        <td>
-                          <span className={`badge ${e.status === 'APPROVED' ? 'badge-success' : 'badge-info'}`}>{e.status}</span>
-                        </td>
+                        </th>
+                        <th>Expense No</th>
+                        <th>Date</th>
+                        <th>Sales</th>
+                        <th>Purpose</th>
+                        <th>Amount</th>
+                        <th>Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {previewResult.expenses.map((e) => (
+                        <tr key={e.id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              style={{ width: 'auto' }}
+                              checked={selectedExpenseIds.has(e.id)}
+                              onChange={() => toggleSelectedExpense(e.id)}
+                            />
+                          </td>
+                          <td>
+                            <Link href={`/expenses/${e.id}`}>{e.expenseNo}</Link>
+                          </td>
+                          <td>{formatDate(e.expenseDate)}</td>
+                          <td>{e.sales?.name}</td>
+                          <td>{e.purpose}</td>
+                          <td>{formatCurrency(e.amount)}</td>
+                          <td>
+                            <span className={`badge ${e.status === 'APPROVED' ? 'badge-success' : 'badge-info'}`}>{e.status}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {showDuplicateConfirm && previewResult.existingDraftSettlement ? (
+                    <div style={{ marginTop: 12, padding: 12, borderRadius: 6, background: 'var(--input-bg)' }}>
+                      <p style={{ fontSize: 13, marginTop: 0 }}>
+                        Settlement sudah ada ({previewResult.existingDraftSettlement.settlementNo}), apakah Anda ingin menambahkan ke
+                        Settlement yang sudah ada atau ingin membuat settlement baru?
+                      </p>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn" disabled={submittingSettlement} onClick={createNewSettlement}>
+                          Buat baru
+                        </button>
+                        <button className="btn btn-primary" disabled={submittingSettlement} onClick={addSelectionToExisting}>
+                          Tambahkan
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      className="btn btn-primary"
+                      disabled={submittingSettlement || selectedExpenseIds.size === 0}
+                      style={{ marginTop: 12 }}
+                      onClick={submitSettlement}
+                    >
+                      {submittingSettlement ? 'Submitting...' : `Submit (${selectedExpenseIds.size})`}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
+        </Modal>
+      )}
+
+      {addModalSettlement && (
+        <Modal title={`Add Expenses to ${addModalSettlement.settlementNo}`} onClose={() => setAddModalSettlement(null)} wide>
+          {eligibleLoading ? (
+            <p style={{ fontSize: 13, color: 'var(--muted)' }}>Loading eligible expenses...</p>
+          ) : eligibleExpenses.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--muted)' }}>
+              Tidak ada expense yang cocok (POD sama, sudah SETTLED &amp; matched, belum masuk settlement lain).
+            </p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 28 }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={addSelectedIds.size === eligibleExpenses.length}
+                      onChange={(e) => setAddSelectedIds(e.target.checked ? new Set(eligibleExpenses.map((x) => x.id)) : new Set())}
+                    />
+                  </th>
+                  <th>Expense No</th>
+                  <th>Date</th>
+                  <th>Sales</th>
+                  <th>Purpose</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {eligibleExpenses.map((e) => (
+                  <tr key={e.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        style={{ width: 'auto' }}
+                        checked={addSelectedIds.has(e.id)}
+                        onChange={() => toggleAddSelected(e.id)}
+                      />
+                    </td>
+                    <td>
+                      <Link href={`/expenses/${e.id}`}>{e.expenseNo}</Link>
+                    </td>
+                    <td>{formatDate(e.expenseDate)}</td>
+                    <td>{e.sales?.name}</td>
+                    <td>{e.purpose}</td>
+                    <td>{formatCurrency(e.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {addError && <div className="error-text">{addError}</div>}
+
+          <button
+            className="btn btn-primary"
+            disabled={adding || addSelectedIds.size === 0}
+            style={{ marginTop: 12 }}
+            onClick={submitAddExpenses}
+          >
+            {adding ? 'Adding...' : `Add Selected (${addSelectedIds.size})`}
+          </button>
         </Modal>
       )}
     </div>
