@@ -117,7 +117,7 @@ interface Expense {
   paymentMethodNote: string | null;
   merchantName: string | null;
   location: string | null;
-  pod: { id: string; name: string } | null;
+  department: { id: string; name: string } | null;
   items: ExpenseItem[];
   invoices: Invoice[];
   extraBrands: ExpenseBrandRow[];
@@ -280,28 +280,28 @@ export default function ExpenseDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expense?.advertiser.id, extraAdvertiserIds]);
 
-  // 1 POD = 1 credit card - scope the Credit Card dropdown to this expense's own POD.
+  // 1 Department = 1 credit card - scope the Credit Card dropdown to this expense's own Department.
   useEffect(() => {
-    if (!expense?.pod?.id) {
+    if (!expense?.department?.id) {
       setCreditCardOptions([]);
       return;
     }
-    api.get<CreditCardOption[]>(`/credit-cards?podId=${expense.pod.id}`).then(setCreditCardOptions).catch(() => undefined);
-  }, [expense?.pod?.id]);
+    api.get<CreditCardOption[]>(`/credit-cards?departmentId=${expense.department.id}`).then(setCreditCardOptions).catch(() => undefined);
+  }, [expense?.department?.id]);
 
   const isOwner = expense?.salesId === user?.id;
   const isOwnerOrBackOffice = isOwner || hasRole('ADMIN', 'FINANCE');
-  // expense.edit.ownpod is shown optimistically, same caveat as expense.approve.ownpod
+  // expense.edit.owndept is shown optimistically, same caveat as expense.approve.owndept
   // below - the backend's canEditExpense() is authoritative and 403s if the expense's
-  // POD isn't actually the actor's.
+  // Department isn't actually the actor's.
   const canEditFields =
     !!expense &&
-    (isOwnerOrBackOffice || hasPermission('expense.edit.all', 'expense.edit.ownpod')) &&
+    (isOwnerOrBackOffice || hasPermission('expense.edit.all', 'expense.edit.owndept')) &&
     !LOCKED_STATUSES.includes(expense.status);
   const currentStepInfo = approval && approval.status === 'PENDING' ? approval.steps.find((s) => s.stepOrder === approval.currentStep) : null;
   // Only the step's actual resolvedApprover (or an ADMIN override) sees the
   // Approve/Reject buttons here - deliberately not surfaced for an
-  // expense.approve.all/ownpod holder too (same call as the Pending Approval
+  // expense.approve.all/owndept holder too (same call as the Pending Approval
   // list), so after they approve their own step the button doesn't linger for
   // the next approver's step. That permission still works via the backend's
   // assertApprovalOverride if someone needs to act on someone else's step.
@@ -638,11 +638,11 @@ export default function ExpenseDetailPage() {
                 <label>Credit Card</label>
                 <select
                   required
-                  disabled={!expense.pod}
+                  disabled={!expense.department}
                   value={editForm.creditCardId}
                   onChange={(e) => setEditForm({ ...editForm, creditCardId: e.target.value })}
                 >
-                  <option value="">{expense.pod ? 'Select card' : 'This expense has no POD'}</option>
+                  <option value="">{expense.department ? 'Select card' : 'This expense has no Department'}</option>
                   {creditCardOptions.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.bank} •••• {c.last4} ({c.cardHolderName})
@@ -891,8 +891,8 @@ export default function ExpenseDetailPage() {
               <div>{expense.purpose}</div>
             </div>
             <div>
-              <div className="label" style={{ color: 'var(--muted)', fontSize: 12 }}>POD</div>
-              <div>{expense.pod?.name || '-'}</div>
+              <div className="label" style={{ color: 'var(--muted)', fontSize: 12 }}>Department</div>
+              <div>{expense.department?.name || '-'}</div>
             </div>
             <div>
               <div className="label" style={{ color: 'var(--muted)', fontSize: 12 }}>Payment Method</div>

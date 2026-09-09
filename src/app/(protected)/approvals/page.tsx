@@ -10,7 +10,7 @@ import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
 
-interface PodOption {
+interface DepartmentOption {
   id: string;
   name: string;
 }
@@ -25,7 +25,7 @@ interface DocSummary {
   date?: string;
   sales: { name: string };
   unit: { name: string };
-  pod?: { id: string; name: string } | null;
+  department?: { id: string; name: string } | null;
   advertiser: { name: string };
   brand: { name: string };
 }
@@ -66,14 +66,14 @@ export default function ApprovalsPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
 
-  const [podFilter, setPodFilter] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState('');
   const [fromDate, setFromDate] = useState(defaultFromDate);
   const [toDate, setToDate] = useState(defaultToDate);
-  const [podOptions, setPodOptions] = useState<PodOption[]>([]);
+  const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
 
   const load = () => {
     const params = new URLSearchParams();
-    if (podFilter) params.set('podId', podFilter);
+    if (departmentFilter) params.set('departmentId', departmentFilter);
     if (fromDate) params.set('fromDate', fromDate);
     if (toDate) params.set('toDate', toDate);
     const qs = params.toString();
@@ -83,11 +83,11 @@ export default function ApprovalsPage() {
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
   };
 
-  useEffect(load, [podFilter, fromDate, toDate]);
+  useEffect(load, [departmentFilter, fromDate, toDate]);
 
   useEffect(() => {
-    const path = canActOnBehalf ? '/pods' : '/pods/me';
-    api.get<PodOption[]>(path).then(setPodOptions).catch(() => undefined);
+    const path = canActOnBehalf ? '/departments' : '/departments/me';
+    api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canActOnBehalf]);
 
@@ -106,9 +106,9 @@ export default function ApprovalsPage() {
   // Deliberately narrower than the Expense detail page's canAct: only the step's
   // actual resolvedApprover (or an ADMIN override) gets a button here, so it
   // disappears the moment they act and only reappears for whoever the *next*
-  // step resolves to - an expense.approve.all/ownpod holder can still act via
+  // step resolves to - an expense.approve.all/owndept holder can still act via
   // the Expense detail page (backend's assertApprovalOverride still allows it),
-  // it just isn't surfaced as a button on every pod-wide pending row in this list.
+  // it just isn't surfaced as a button on every department-wide pending row in this list.
   const canActOn = (step: StepInfo | undefined) => !!step && (step.resolvedApprover?.id === user?.id || hasRole('ADMIN'));
 
   const approve = async (r: PendingApproval) => {
@@ -156,9 +156,9 @@ export default function ApprovalsPage() {
       </div>
       <div className="toolbar" style={{ marginTop: -4 }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <select value={podFilter} onChange={(e) => setPodFilter(e.target.value)} style={{ width: 200 }}>
-            <option value="">{canActOnBehalf ? 'All POD' : 'All my PODs'}</option>
-            {podOptions.map((p) => (
+          <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ width: 200 }}>
+            <option value="">{canActOnBehalf ? 'All Department' : 'All my Departments'}</option>
+            {departmentOptions.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
@@ -183,7 +183,7 @@ export default function ApprovalsPage() {
               <th>Doc No</th>
               <th>Date</th>
               <th>Sales</th>
-              <th>POD</th>
+              <th>Department</th>
               <th>Unit</th>
               <th>Advertiser</th>
               <th>Brand</th>
@@ -210,7 +210,7 @@ export default function ApprovalsPage() {
                   </td>
                   <td>{formatDate(date)}</td>
                   <td>{doc.sales?.name}</td>
-                  <td>{doc.pod?.name ?? '-'}</td>
+                  <td>{doc.department?.name ?? '-'}</td>
                   <td>{doc.unit?.name}</td>
                   <td>{doc.advertiser?.name}</td>
                   <td>{doc.brand?.name}</td>

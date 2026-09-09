@@ -51,7 +51,7 @@ interface ExpenseRow {
   sales: { name: string };
   advertiser: { name: string };
   brand: { name: string };
-  pod: { id: string; name: string } | null;
+  department: { id: string; name: string } | null;
   bankTransactions: BankTransactionRef[];
 }
 
@@ -101,7 +101,7 @@ interface ItemRow {
   categoryId: string;
 }
 
-interface PodOption {
+interface DepartmentOption {
   id: string;
   name: string;
 }
@@ -253,7 +253,7 @@ export default function ExpensesPage() {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const [podFilter, setPodFilter] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState('');
   const [fromDate, setFromDate] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 1);
@@ -261,7 +261,7 @@ export default function ExpensesPage() {
   });
   const [toDate, setToDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [matchedFilter, setMatchedFilter] = useState('');
-  const [filterPodOptions, setFilterPodOptions] = useState<PodOption[]>([]);
+  const [filterDepartmentOptions, setFilterDepartmentOptions] = useState<DepartmentOption[]>([]);
   const [showAutoMatchModal, setShowAutoMatchModal] = useState(false);
   const [autoMatchFiles, setAutoMatchFiles] = useState<File[]>([]);
   const [matching, setMatching] = useState(false);
@@ -272,7 +272,7 @@ export default function ExpensesPage() {
   const [salesOptions, setSalesOptions] = useState<SalesOption[]>([]);
   const [onBehalfOfSalesId, setOnBehalfOfSalesId] = useState('');
   const [categories, setCategories] = useState<CategoryOption[]>([]);
-  const [podOptions, setPodOptions] = useState<PodOption[]>([]);
+  const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
   const [creditCardOptions, setCreditCardOptions] = useState<CreditCardOption[]>([]);
   const [advertiserOptions, setAdvertiserOptions] = useState<AdvertiserOption[]>([]);
   const [agencyOptions, setAgencyOptions] = useState<AgencyOption[]>([]);
@@ -287,7 +287,7 @@ export default function ExpensesPage() {
     expenseDate: '',
     purpose: '',
     amount: '',
-    podId: '',
+    departmentId: '',
     unitId: '',
     activityTypeId: '',
     paymentMethodType: '',
@@ -314,7 +314,7 @@ export default function ExpensesPage() {
     const params = new URLSearchParams();
     if (status) params.set('status', status);
     if (search) params.set('search', search);
-    if (podFilter) params.set('podId', podFilter);
+    if (departmentFilter) params.set('departmentId', departmentFilter);
     if (fromDate) params.set('fromDate', fromDate);
     if (toDate) params.set('toDate', toDate);
     if (matchedFilter) params.set('matched', matchedFilter);
@@ -329,11 +329,11 @@ export default function ExpensesPage() {
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
   };
 
-  useEffect(load, [status, search, podFilter, fromDate, toDate, matchedFilter]);
+  useEffect(load, [status, search, departmentFilter, fromDate, toDate, matchedFilter]);
 
   useEffect(() => {
-    const path = canActOnBehalf ? '/pods' : '/pods/me';
-    api.get<PodOption[]>(path).then(setFilterPodOptions).catch(() => undefined);
+    const path = canActOnBehalf ? '/departments' : '/departments/me';
+    api.get<DepartmentOption[]>(path).then(setFilterDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canActOnBehalf]);
 
@@ -355,7 +355,7 @@ export default function ExpensesPage() {
           <td>${r.expenseNo}</td>
           <td>${formatDate(r.expenseDate)}</td>
           <td>${r.sales?.name ?? ''}</td>
-          <td>${r.pod?.name ?? ''}</td>
+          <td>${r.department?.name ?? ''}</td>
           <td>${r.advertiser?.name ?? ''}</td>
           <td>${r.brand?.name ?? ''}</td>
           <td>${r.purpose}</td>
@@ -373,7 +373,7 @@ export default function ExpensesPage() {
     </style></head><body>
       <h3>Expenses</h3>
       <table><thead><tr>
-        <th>Expense No</th><th>Date</th><th>Sales</th><th>POD</th><th>Advertiser</th><th>Brand</th>
+        <th>Expense No</th><th>Date</th><th>Sales</th><th>Department</th><th>Advertiser</th><th>Brand</th>
         <th>Purpose</th><th>Amount</th><th>Status</th><th>Matching</th>
       </tr></thead><tbody>${tableRows}</tbody></table>
     </body></html>`);
@@ -389,15 +389,15 @@ export default function ExpensesPage() {
     api.get<SimpleOption[]>('/activity-types').then(setActivityTypeOptions).catch(() => undefined);
   }, []);
 
-  // 1 POD = 1 credit card - the Credit Card dropdown only ever lists the card(s)
-  // belonging to whichever POD is currently picked on the form.
+  // 1 Department = 1 credit card - the Credit Card dropdown only ever lists the card(s)
+  // belonging to whichever Department is currently picked on the form.
   useEffect(() => {
-    if (!form.podId) {
+    if (!form.departmentId) {
       setCreditCardOptions([]);
       return;
     }
-    api.get<CreditCardOption[]>(`/credit-cards?podId=${form.podId}`).then(setCreditCardOptions).catch(() => undefined);
-  }, [form.podId]);
+    api.get<CreditCardOption[]>(`/credit-cards?departmentId=${form.departmentId}`).then(setCreditCardOptions).catch(() => undefined);
+  }, [form.departmentId]);
 
   // Brand options narrow to whichever Advertisers are currently selected above,
   // so Brand always matches Advertiser.
@@ -416,20 +416,20 @@ export default function ExpensesPage() {
   useEffect(() => {
     const targetSalesId = canActOnBehalf ? onBehalfOfSalesId : user?.id;
     if (!targetSalesId) {
-      setPodOptions([]);
+      setDepartmentOptions([]);
       return;
     }
-    const path = canActOnBehalf ? `/pods?salesId=${targetSalesId}` : '/pods/me';
-    api.get<PodOption[]>(path).then(setPodOptions).catch(() => undefined);
+    const path = canActOnBehalf ? `/departments?salesId=${targetSalesId}` : '/departments/me';
+    api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
   }, [canActOnBehalf, onBehalfOfSalesId, user?.id]);
 
-  // POD auto-fills to the Sales's own (first) POD once known - still changeable below.
+  // Department auto-fills to the Sales's own (first) Department once known - still changeable below.
   useEffect(() => {
-    if (podOptions.length > 0 && !form.podId) {
-      setForm((f) => (f.podId ? f : { ...f, podId: podOptions[0].id }));
+    if (departmentOptions.length > 0 && !form.departmentId) {
+      setForm((f) => (f.departmentId ? f : { ...f, departmentId: departmentOptions[0].id }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [podOptions]);
+  }, [departmentOptions]);
 
   // Unit auto-fills from the Sales's own profile (or the on-behalf-of Sales's profile).
   useEffect(() => {
@@ -456,7 +456,7 @@ export default function ExpensesPage() {
       expenseDate: '',
       purpose: '',
       amount: '',
-      podId: '',
+      departmentId: '',
       unitId: '',
       activityTypeId: '',
       paymentMethodType: '',
@@ -589,7 +589,7 @@ export default function ExpensesPage() {
       const payload: Record<string, unknown> = {
         ...form,
         amount: Number(form.amount),
-        podId: form.podId || undefined,
+        departmentId: form.departmentId || undefined,
         creditCardId: form.paymentMethodType === 'CREDIT_CARD' ? form.creditCardId || undefined : undefined,
         paymentMethodType: form.paymentMethodType || undefined,
         paymentMethodNote: form.paymentMethodNote || undefined,
@@ -744,9 +744,9 @@ export default function ExpensesPage() {
 
       <div className="toolbar" style={{ marginTop: -4 }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <select value={podFilter} onChange={(e) => setPodFilter(e.target.value)} style={{ width: 200 }}>
-            <option value="">{canActOnBehalf ? 'All POD' : 'All my PODs'}</option>
-            {filterPodOptions.map((p) => (
+          <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ width: 200 }}>
+            <option value="">{canActOnBehalf ? 'All Department' : 'All my Departments'}</option>
+            {filterDepartmentOptions.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
@@ -964,10 +964,10 @@ export default function ExpensesPage() {
                   </div>
                 </div>
                 <div className="form-row">
-                  <label>POD</label>
-                  <select value={form.podId} onChange={(e) => setForm({ ...form, podId: e.target.value })}>
+                  <label>Department</label>
+                  <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
                     <option value="">- (optional)</option>
-                    {podOptions.map((p) => (
+                    {departmentOptions.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name}
                       </option>
@@ -993,18 +993,18 @@ export default function ExpensesPage() {
                     <label>Credit Card</label>
                     <select
                       required
-                      disabled={!form.podId}
+                      disabled={!form.departmentId}
                       value={form.creditCardId}
                       onChange={(e) => setForm({ ...form, creditCardId: e.target.value })}
                     >
-                      <option value="">{form.podId ? 'Select card' : 'Select a POD first'}</option>
+                      <option value="">{form.departmentId ? 'Select card' : 'Select a Department first'}</option>
                       {creditCardOptions.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.bank} •••• {c.last4} ({c.cardHolderName})
                         </option>
                       ))}
                     </select>
-                    {!form.podId && <span style={{ fontSize: 12, color: 'var(--muted)' }}>Select a POD first.</span>}
+                    {!form.departmentId && <span style={{ fontSize: 12, color: 'var(--muted)' }}>Select a Department first.</span>}
                   </div>
                 )}
                 {['GOPAY', 'SHOPEEPAY', 'DANA', 'OVO'].includes(form.paymentMethodType) && (
@@ -1429,7 +1429,7 @@ export default function ExpensesPage() {
               <th>Expense No</th>
               <th>Date</th>
               <th>Sales</th>
-              <th>POD</th>
+              <th>Department</th>
               <th>Advertiser</th>
               <th>Brand</th>
               <th>Purpose</th>
@@ -1452,7 +1452,7 @@ export default function ExpensesPage() {
                   </td>
                   <td>{formatDate(r.expenseDate)}</td>
                   <td>{r.sales?.name}</td>
-                  <td>{r.pod?.name || '-'}</td>
+                  <td>{r.department?.name || '-'}</td>
                   <td>{r.advertiser?.name}</td>
                   <td>{r.brand?.name}</td>
                   <td>{r.purpose}</td>

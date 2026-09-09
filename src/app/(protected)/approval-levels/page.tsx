@@ -13,9 +13,9 @@ interface Option {
 }
 
 // Sort naturally ascending ("POD 2" before "POD 10").
-const podCollator = new Intl.Collator('id', { numeric: true, sensitivity: 'base' });
-function sortPods(pods: Option[]): Option[] {
-  return [...pods].sort((a, b) => podCollator.compare(a.name, b.name));
+const departmentCollator = new Intl.Collator('id', { numeric: true, sensitivity: 'base' });
+function sortDepartments(departments: Option[]): Option[] {
+  return [...departments].sort((a, b) => departmentCollator.compare(a.name, b.name));
 }
 
 interface LevelStep {
@@ -27,8 +27,7 @@ interface ApprovalLevel {
   id: string;
   name: string;
   documentStage: 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT';
-  scopeType: 'ANY' | 'POD' | 'DEPARTMENT';
-  pod: Option | null;
+  scopeType: 'ANY' | 'DEPARTMENT';
   department: Option | null;
   minAmount: string;
   maxAmount: string | null;
@@ -42,14 +41,13 @@ function formatCurrency(value: string | number | null) {
 }
 
 // Approval Level (replaces the old Approval Rule): configurable per Document
-// Stage (Pre-Event / Settlement) and per POD or Department scope, with an
-// ordered Position chain (e.g. Head POD -> Supervisor). At submit time every
-// step is resolved to a concrete user (POD -> POD's Approvers, Department ->
-// a user holding that Position in that Department, Any -> any active holder).
+// Stage (Pre-Event / Settlement) and per Department scope, with an ordered
+// Position chain (e.g. Head -> Supervisor). At submit time every step is
+// resolved to a concrete user (Department -> that Department's Approvers,
+// Any -> any active holder).
 export default function ApprovalLevelsPage() {
   const [levels, setLevels] = useState<ApprovalLevel[]>([]);
   const [positions, setPositions] = useState<Option[]>([]);
-  const [pods, setPods] = useState<Option[]>([]);
   const [departments, setDepartments] = useState<Option[]>([]);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -59,8 +57,7 @@ export default function ApprovalLevelsPage() {
   const [form, setForm] = useState({
     name: '',
     documentStage: 'EXPENSES' as 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT',
-    scopeType: 'ANY' as 'ANY' | 'POD' | 'DEPARTMENT',
-    podId: '',
+    scopeType: 'ANY' as 'ANY' | 'DEPARTMENT',
     departmentId: '',
     minAmount: '0',
     maxAmount: '',
@@ -74,15 +71,14 @@ export default function ApprovalLevelsPage() {
   const filteredLevels = levels.filter((l) => {
     if (!search) return true;
     const q = search.toLowerCase();
-    return [l.name, l.pod?.name, l.department?.name].some((v) => v?.toLowerCase().includes(q));
+    return [l.name, l.department?.name].some((v) => v?.toLowerCase().includes(q));
   });
   const pagination = usePagination(filteredLevels);
 
   const load = () => {
     api.get<ApprovalLevel[]>('/approval-levels').then(setLevels).catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
     api.get<Option[]>('/positions').then(setPositions).catch(() => undefined);
-    api.get<Option[]>('/pods').then((res) => setPods(sortPods(res))).catch(() => undefined);
-    api.get<Option[]>('/departments').then(setDepartments).catch(() => undefined);
+    api.get<Option[]>('/departments').then((res) => setDepartments(sortDepartments(res))).catch(() => undefined);
   };
 
   useEffect(load, []);
@@ -90,7 +86,7 @@ export default function ApprovalLevelsPage() {
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
-    setForm({ name: '', documentStage: 'EXPENSES', scopeType: 'ANY', podId: '', departmentId: '', minAmount: '0', maxAmount: '', isActive: true, stepPositionIds: [] });
+    setForm({ name: '', documentStage: 'EXPENSES', scopeType: 'ANY', departmentId: '', minAmount: '0', maxAmount: '', isActive: true, stepPositionIds: [] });
     setPickerPositionId('');
   };
 
@@ -100,7 +96,6 @@ export default function ApprovalLevelsPage() {
       name: l.name,
       documentStage: l.documentStage,
       scopeType: l.scopeType,
-      podId: l.pod?.id ?? '',
       departmentId: l.department?.id ?? '',
       minAmount: l.minAmount,
       maxAmount: l.maxAmount ?? '',
@@ -130,7 +125,6 @@ export default function ApprovalLevelsPage() {
         await api.patch(`/approval-levels/${editingId}`, {
           name: form.name,
           scopeType: form.scopeType,
-          podId: form.scopeType === 'POD' ? form.podId : undefined,
           departmentId: form.scopeType === 'DEPARTMENT' ? form.departmentId : undefined,
           minAmount: Number(form.minAmount),
           maxAmount: form.maxAmount ? Number(form.maxAmount) : undefined,
@@ -142,7 +136,6 @@ export default function ApprovalLevelsPage() {
           name: form.name,
           documentStage: form.documentStage,
           scopeType: form.scopeType,
-          podId: form.scopeType === 'POD' ? form.podId : undefined,
           departmentId: form.scopeType === 'DEPARTMENT' ? form.departmentId : undefined,
           minAmount: Number(form.minAmount),
           maxAmount: form.maxAmount ? Number(form.maxAmount) : undefined,
@@ -159,7 +152,6 @@ export default function ApprovalLevelsPage() {
   };
 
   const scopeLabel = (l: ApprovalLevel) => {
-    if (l.scopeType === 'POD') return `POD: ${l.pod?.name ?? '-'}`;
     if (l.scopeType === 'DEPARTMENT') return `Department: ${l.department?.name ?? '-'}`;
     return 'Any';
   };
@@ -170,7 +162,7 @@ export default function ApprovalLevelsPage() {
         <h1>Approval Level</h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <SearchBox
-            placeholder="Search name, POD, department..."
+            placeholder="Search name, department..."
             value={searchInput}
             onChange={setSearchInput}
             onSearch={() => setSearch(searchInput)}
@@ -181,10 +173,9 @@ export default function ApprovalLevelsPage() {
         </div>
       </div>
       <p style={{ color: 'var(--muted)', marginTop: -8 }}>
-        On submit, a Pre-Event or Expense is matched against active Levels by Document Stage, amount, and scope (POD /
-        Department exact match wins over Any). Each step in the chain must resolve to a real user (POD -&gt; POD
-        Approvers, Department -&gt; a user holding that Position in that Department, Any -&gt; any active holder) or the
-        submit is blocked with a precise error.
+        On submit, a Pre-Event or Expense is matched against active Levels by Document Stage, amount, and scope
+        (Department exact match wins over Any). Each step in the chain must resolve to a real user (Department -&gt;
+        that Department&apos;s Approvers, Any -&gt; any active holder) or the submit is blocked with a precise error.
       </p>
 
       {showForm && (
@@ -212,25 +203,11 @@ export default function ApprovalLevelsPage() {
             </div>
             <div className="form-row">
               <label>Scope</label>
-              <select value={form.scopeType} onChange={(e) => setForm({ ...form, scopeType: e.target.value as 'ANY' | 'POD' | 'DEPARTMENT' })}>
+              <select value={form.scopeType} onChange={(e) => setForm({ ...form, scopeType: e.target.value as 'ANY' | 'DEPARTMENT' })}>
                 <option value="ANY">Any (fallback)</option>
-                <option value="POD">Specific POD</option>
                 <option value="DEPARTMENT">Specific Department</option>
               </select>
             </div>
-            {form.scopeType === 'POD' && (
-              <div className="form-row">
-                <label>POD</label>
-                <select required value={form.podId} onChange={(e) => setForm({ ...form, podId: e.target.value })}>
-                  <option value="">Select POD</option>
-                  {pods.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
             {form.scopeType === 'DEPARTMENT' && (
               <div className="form-row">
                 <label>Department</label>

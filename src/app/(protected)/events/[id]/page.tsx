@@ -21,7 +21,6 @@ interface EventDetail {
   salesId: string;
   sales: { name: string };
   unit: { name: string } | null;
-  pod: { name: string } | null;
   department: { name: string } | null;
   advertiser: { name: string };
   brand: { name: string };
@@ -143,10 +142,6 @@ export default function EventDetailPage() {
           <div>
             <div className="label" style={{ color: 'var(--muted)', fontSize: 12 }}>Unit</div>
             <div>{event.unit?.name ?? '-'}</div>
-          </div>
-          <div>
-            <div className="label" style={{ color: 'var(--muted)', fontSize: 12 }}>POD</div>
-            <div>{event.pod?.name ?? '-'}</div>
           </div>
           <div>
             <div className="label" style={{ color: 'var(--muted)', fontSize: 12 }}>Department</div>

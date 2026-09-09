@@ -51,7 +51,7 @@ interface EventRow {
   advertiser: { id: string; name: string };
   brand: { id: string; name: string };
   activityType: { id: string; name: string };
-  pod: { id: string; name: string } | null;
+  department: { id: string; name: string } | null;
   approvalRequest: ApprovalRequestSummary | null;
 }
 
@@ -74,7 +74,7 @@ function formatCurrency(value: string | number) {
 }
 
 // Pre-Event request (BRD section 7-8). Sales creates + submits; approved via
-// the POD/Department-scoped Approval Level chain (see /events/[id] for the trail).
+// the Department-scoped Approval Level chain (see /events/[id] for the trail).
 export default function EventsPage() {
   const { hasRole, user } = useAuth();
   const canActOnBehalf = hasRole('ADMIN', 'FINANCE');
@@ -94,12 +94,12 @@ export default function EventsPage() {
   const [activityTypes, setActivityTypes] = useState<Option[]>([]);
   const [salesOptions, setSalesOptions] = useState<SalesOption[]>([]);
   const [onBehalfOfSalesId, setOnBehalfOfSalesId] = useState('');
-  const [podOptions, setPodOptions] = useState<Option[]>([]);
+  const [departmentOptions, setDepartmentOptions] = useState<Option[]>([]);
   const [form, setForm] = useState({
     advertiserId: '',
     brandId: '',
     activityTypeId: '',
-    podId: '',
+    departmentId: '',
     date: '',
     startTime: '',
     endTime: '',
@@ -141,15 +141,15 @@ export default function EventsPage() {
   useEffect(() => {
     const targetSalesId = canActOnBehalf ? onBehalfOfSalesId : user?.id;
     if (!targetSalesId) {
-      setPodOptions([]);
+      setDepartmentOptions([]);
       return;
     }
-    const path = canActOnBehalf ? `/pods?salesId=${targetSalesId}` : '/pods/me';
-    api.get<Option[]>(path).then(setPodOptions).catch(() => undefined);
+    const path = canActOnBehalf ? `/departments?salesId=${targetSalesId}` : '/departments/me';
+    api.get<Option[]>(path).then(setDepartmentOptions).catch(() => undefined);
   }, [canActOnBehalf, onBehalfOfSalesId, user?.id]);
 
   const resetForm = () => {
-    setForm({ advertiserId: '', brandId: '', activityTypeId: '', podId: '', date: '', startTime: '', endTime: '', location: '', purpose: '', estimatedAmount: '', notes: '' });
+    setForm({ advertiserId: '', brandId: '', activityTypeId: '', departmentId: '', date: '', startTime: '', endTime: '', location: '', purpose: '', estimatedAmount: '', notes: '' });
     setOnBehalfOfSalesId('');
   };
 
@@ -165,7 +165,7 @@ export default function EventsPage() {
       advertiserId: r.advertiser?.id ?? '',
       brandId: r.brand?.id ?? '',
       activityTypeId: r.activityType?.id ?? '',
-      podId: r.pod?.id ?? '',
+      departmentId: r.department?.id ?? '',
       date: r.date.slice(0, 10),
       startTime: r.startTime ?? '',
       endTime: r.endTime ?? '',
@@ -174,7 +174,7 @@ export default function EventsPage() {
       estimatedAmount: r.estimatedAmount,
       notes: r.notes ?? '',
     });
-    // So the POD dropdown reflects the owning Sales' PODs when back-office edits
+    // So the Department dropdown reflects the owning Sales' Departments when back-office edits
     // someone else's request (mirrors the create form's on-behalf-of wiring).
     if (canActOnBehalf) setOnBehalfOfSalesId(r.salesId);
     setShowForm(true);
@@ -236,7 +236,7 @@ export default function EventsPage() {
         advertiserId: form.advertiserId,
         brandId: form.brandId,
         activityTypeId: form.activityTypeId,
-        podId: form.podId || undefined,
+        departmentId: form.departmentId || undefined,
         date: form.date,
         startTime: form.startTime || undefined,
         endTime: form.endTime || undefined,
@@ -347,10 +347,10 @@ export default function EventsPage() {
               </select>
             </div>
             <div className="form-row">
-              <label>POD (determines approval chain)</label>
-              <select value={form.podId} onChange={(e) => setForm({ ...form, podId: e.target.value })}>
-                <option value="">- (auto if you cover exactly one POD)</option>
-                {podOptions.map((p) => (
+              <label>Department (determines approval chain)</label>
+              <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
+                <option value="">- (auto if you belong to exactly one Department)</option>
+                {departmentOptions.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
                   </option>

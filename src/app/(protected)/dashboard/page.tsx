@@ -5,6 +5,7 @@ import { api, ApiError } from '@/lib/api';
 import DatePicker from '@/components/DatePicker';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
+import DepartmentExpenseChart from '@/components/DepartmentExpenseChart';
 
 interface Summary {
   totalExpense: number;
@@ -23,7 +24,7 @@ interface GroupRow {
   transactionCount: number;
 }
 
-interface PodRow {
+interface DepartmentRow {
   id: string;
   name: string;
   totalExpense: number;
@@ -49,13 +50,13 @@ export default function DashboardPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [byUnit, setByUnit] = useState<GroupRow[]>([]);
   const [byAdvertiser, setByAdvertiser] = useState<GroupRow[]>([]);
-  const [byPod, setByPod] = useState<PodRow[]>([]);
+  const [byDepartment, setByDepartment] = useState<DepartmentRow[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   const unitPagination = usePagination(byUnit);
   const advertiserPagination = usePagination(byAdvertiser);
-  const podPagination = usePagination(byPod);
+  const departmentPagination = usePagination(byDepartment);
 
   useEffect(() => {
     const qs = buildQuery(from, to);
@@ -64,13 +65,13 @@ export default function DashboardPage() {
       api.get<Summary>(`/dashboard/summary${qs}`),
       api.get<GroupRow[]>(`/dashboard/expense-by-unit${qs}`),
       api.get<GroupRow[]>(`/dashboard/expense-by-advertiser${qs}`),
-      api.get<PodRow[]>(`/dashboard/expense-by-pod${qs}`),
+      api.get<DepartmentRow[]>(`/dashboard/expense-by-department${qs}`),
     ])
       .then(([s, u, c, p]) => {
         setSummary(s);
         setByUnit(u);
         setByAdvertiser(c);
-        setByPod(p);
+        setByDepartment(p);
         setError('');
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load dashboard'))
@@ -210,46 +211,53 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="card">
-            <h3>Expense by POD</h3>
-            <p style={{ color: 'var(--muted)', marginTop: -8, fontSize: 12 }}>
-              POD = a named coverage group for one Sales, containing multiple Agency→Brand pairs.
-            </p>
-            <table>
-              <thead>
-                <tr>
-                  <th>POD</th>
-                  <th>Transactions</th>
-                  <th>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {podPagination.pageRows.map((row) => (
-                  <tr key={row.id}>
-                    <td>{row.name}</td>
-                    <td>{row.transactionCount}</td>
-                    <td>{formatCurrency(Number(row.totalExpense))}</td>
-                  </tr>
-                ))}
-                {byPod.length === 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: 16 }}>
+            <div className="card">
+              <h3>Total Expense by Department</h3>
+              <p style={{ color: 'var(--muted)', marginTop: -8, marginBottom: 18, fontSize: 12 }}>
+                Department = an org department and/or a named coverage group for one or more Sales, containing multiple Agency→Brand pairs.
+              </p>
+              <DepartmentExpenseChart data={byDepartment} />
+            </div>
+
+            <div className="card">
+              <h3>Expense by Department</h3>
+              <table>
+                <thead>
                   <tr>
-                    <td colSpan={3} style={{ color: 'var(--muted)' }}>No data</td>
+                    <th>Department</th>
+                    <th>Transactions</th>
+                    <th>Total</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-            {byPod.length > 0 && (
-              <Pagination
-                page={podPagination.page}
-                totalPages={podPagination.totalPages}
-                pageSize={podPagination.pageSize}
-                onPageChange={podPagination.setPage}
-                onPageSizeChange={podPagination.setPageSize}
-                total={podPagination.total}
-                rangeStart={podPagination.rangeStart}
-                rangeEnd={podPagination.rangeEnd}
-              />
-            )}
+                </thead>
+                <tbody>
+                  {departmentPagination.pageRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.name}</td>
+                      <td>{row.transactionCount}</td>
+                      <td>{formatCurrency(Number(row.totalExpense))}</td>
+                    </tr>
+                  ))}
+                  {byDepartment.length === 0 && (
+                    <tr>
+                      <td colSpan={3} style={{ color: 'var(--muted)' }}>No data</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {byDepartment.length > 0 && (
+                <Pagination
+                  page={departmentPagination.page}
+                  totalPages={departmentPagination.totalPages}
+                  pageSize={departmentPagination.pageSize}
+                  onPageChange={departmentPagination.setPage}
+                  onPageSizeChange={departmentPagination.setPageSize}
+                  total={departmentPagination.total}
+                  rangeStart={departmentPagination.rangeStart}
+                  rangeEnd={departmentPagination.rangeEnd}
+                />
+              )}
+            </div>
           </div>
         </>
       ) : null}

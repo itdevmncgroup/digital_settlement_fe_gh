@@ -40,15 +40,14 @@ interface SettlementRow {
   totalAmount: string;
   status: 'DRAFT' | 'COMPLETE';
   createdAt: string;
-  pod: { id: string; name: string };
-  department: { name: string } | null;
+  department: { id: string; name: string };
   createdBy: { name: string };
   expenses: SettlementExpenseRow[];
 }
 
 const MATCHED_TXN_STATUSES = ['AUTO_MATCHED', 'MANUAL_MATCHED'];
 
-interface PodOption {
+interface DepartmentOption {
   id: string;
   name: string;
 }
@@ -82,12 +81,12 @@ const defaultToDate = () => new Date().toISOString().slice(0, 10);
 export default function SettlementPage() {
   const { user, hasRole, hasPermission } = useAuth();
   const canManage = hasRole('ADMIN', 'FINANCE');
-  const canGenerate = hasRole('SALES') || canManage || hasPermission('settlement.create.ownpod');
+  const canGenerate = hasRole('SALES') || canManage || hasPermission('settlement.create.owndept');
   const canViewBankMatching = canManage || hasPermission('expense.automatch');
 
   const [rows, setRows] = useState<SettlementRow[]>([]);
-  const [podOptions, setPodOptions] = useState<PodOption[]>([]);
-  const [podFilter, setPodFilter] = useState('');
+  const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
+  const [departmentFilter, setDepartmentFilter] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [expandedId, setExpandedId] = useState('');
@@ -97,20 +96,20 @@ export default function SettlementPage() {
   const filteredRows = rows.filter((r) => {
     if (!search) return true;
     const q = search.toLowerCase();
-    return [r.settlementNo, r.pod?.name, r.department?.name, r.createdBy?.name].some((v) => v?.toLowerCase().includes(q));
+    return [r.settlementNo, r.department?.name, r.createdBy?.name].some((v) => v?.toLowerCase().includes(q));
   });
   const pagination = usePagination(filteredRows);
 
   const [showGenerateModal, setShowGenerateModal] = useState(false);
-  const [genPodId, setGenPodId] = useState('');
+  const [genDepartmentId, setGenDepartmentId] = useState('');
   const [genFromDate, setGenFromDate] = useState(defaultFromDate);
   const [genToDate, setGenToDate] = useState(defaultToDate);
-  const [generating, setGenerating] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [generateError, setGenerateError] = useState('');
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
   const [selectedExpenseIds, setSelectedExpenseIds] = useState<Set<string>>(new Set());
   const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false);
-  const [submittingSettlement, setSubmittingSettlement] = useState(false);
+  const [creatingSettlement, setCreatingSettlement] = useState(false);
 
   const [addModalSettlement, setAddModalSettlement] = useState<SettlementRow | null>(null);
   const [eligibleExpenses, setEligibleExpenses] = useState<GeneratedExpenseRow[]>([]);
@@ -120,18 +119,18 @@ export default function SettlementPage() {
   const [adding, setAdding] = useState(false);
 
   const load = () => {
-    const qs = podFilter ? `?podId=${podFilter}` : '';
+    const qs = departmentFilter ? `?departmentId=${departmentFilter}` : '';
     api
       .get<SettlementRow[]>(`/settlements${qs}`)
       .then(setRows)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
   };
 
-  useEffect(load, [podFilter]);
+  useEffect(load, [departmentFilter]);
 
   useEffect(() => {
-    const path = canManage ? '/pods' : '/pods/me';
-    api.get<PodOption[]>(path).then(setPodOptions).catch(() => undefined);
+    const path = canManage ? '/departments' : '/departments/me';
+    api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canManage]);
 
@@ -166,7 +165,7 @@ export default function SettlementPage() {
   };
 
   const openGenerateModal = () => {
-    setGenPodId('');
+    setGenDepartmentId('');
     setGenFromDate(defaultFromDate());
     setGenToDate(defaultToDate());
     setGenerateError('');
@@ -176,30 +175,33 @@ export default function SettlementPage() {
     setShowGenerateModal(true);
   };
 
-  // Preview-only: scopes the search to one POD + one date range (instead of
-  // grabbing every eligible POD at once) and lists the matching, already
-  // SETTLED/bank-matched Expenses for review - nothing is created yet, that's
-  // the Submit step below (createNewSettlement / addSelectionToExisting).
-  const generateSettlement = async () => {
-    if (!genPodId) {
-      setGenerateError('Pilih POD terlebih dahulu.');
+  // Search step: scopes the search to one Department + one date range
+  // (instead of grabbing every eligible Department at once) and lists the
+  // matching, already bank-matched Expenses for review/checklisting - nothing
+  // is pre-checked, the user picks which ones to include. Nothing is created
+  // yet - the backend bundles in whether a DRAFT settlement already covers
+  // this exact Department/date range too, which the Generate Settlement step
+  // below uses to decide whether to prompt before committing anything.
+  const searchExpenses = async () => {
+    if (!genDepartmentId) {
+      setGenerateError('Pilih Department terlebih dahulu.');
       return;
     }
-    setGenerating(true);
+    setSearching(true);
     setGenerateError('');
     setShowDuplicateConfirm(false);
     try {
       const result = await api.post<PreviewResult>('/settlements/generate', {
-        podId: genPodId,
+        departmentId: genDepartmentId,
         fromDate: genFromDate,
         toDate: genToDate,
       });
       setPreviewResult(result);
-      setSelectedExpenseIds(new Set(result.expenses.map((e) => e.id)));
+      setSelectedExpenseIds(new Set());
     } catch (err) {
-      setGenerateError(err instanceof ApiError ? err.message : 'Generate Settlement failed');
+      setGenerateError(err instanceof ApiError ? err.message : 'Search failed');
     } finally {
-      setGenerating(false);
+      setSearching(false);
     }
   };
 
@@ -211,10 +213,12 @@ export default function SettlementPage() {
       return next;
     });
 
-  // Submit: if a DRAFT settlement already covers this POD, ask "Buat baru" vs
-  // "Tambahkan" before committing anything; otherwise there's nothing to
-  // conflict with, so create the new settlement straight away.
-  const submitSettlement = () => {
+  // Generate Settlement step: first checks whether a DRAFT settlement already
+  // covers this exact Department/date-range search (returned alongside the
+  // search results) - if so, ask Yes/No before committing anything;
+  // otherwise there's nothing to conflict with, so create the new settlement
+  // straight away.
+  const handleGenerateSettlement = () => {
     if (selectedExpenseIds.size === 0) return;
     if (previewResult?.existingDraftSettlement) {
       setShowDuplicateConfirm(true);
@@ -223,23 +227,25 @@ export default function SettlementPage() {
     createNewSettlement();
   };
 
+  // Also doubles as "No" on the duplicate-settlement prompt.
   const createNewSettlement = async () => {
-    setSubmittingSettlement(true);
+    setCreatingSettlement(true);
     setGenerateError('');
     try {
-      await api.post('/settlements/from-selection', { podId: genPodId, expenseIds: Array.from(selectedExpenseIds) });
+      await api.post('/settlements/from-selection', { departmentId: genDepartmentId, expenseIds: Array.from(selectedExpenseIds) });
       setShowGenerateModal(false);
       load();
     } catch (err) {
       setGenerateError(err instanceof ApiError ? err.message : 'Failed to create settlement');
     } finally {
-      setSubmittingSettlement(false);
+      setCreatingSettlement(false);
     }
   };
 
+  // "Yes" on the duplicate-settlement prompt.
   const addSelectionToExisting = async () => {
     if (!previewResult?.existingDraftSettlement) return;
-    setSubmittingSettlement(true);
+    setCreatingSettlement(true);
     setGenerateError('');
     try {
       await api.post(`/settlements/${previewResult.existingDraftSettlement.id}/expenses`, { expenseIds: Array.from(selectedExpenseIds) });
@@ -248,13 +254,13 @@ export default function SettlementPage() {
     } catch (err) {
       setGenerateError(err instanceof ApiError ? err.message : 'Failed to add expenses');
     } finally {
-      setSubmittingSettlement(false);
+      setCreatingSettlement(false);
     }
   };
 
   // Lets a Sales/back-office user keep growing an already-created DRAFT
-  // Settlement as more of that POD's Expenses become SETTLED/matched, instead
-  // of only ever bundling them into a brand-new one via "Create Settlement".
+  // Settlement as more of that Department's Expenses become SETTLED/matched,
+  // instead of only ever bundling them into a brand-new one via "Create Settlement".
   const openAddExpensesModal = (r: SettlementRow) => {
     setAddModalSettlement(r);
     setAddSelectedIds(new Set());
@@ -342,16 +348,16 @@ export default function SettlementPage() {
         <h1>Settlement</h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <SearchBox
-            placeholder="Search settlement no, POD, department..."
+            placeholder="Search settlement no, department..."
             value={searchInput}
             onChange={setSearchInput}
             onSearch={() => setSearch(searchInput)}
           />
-          <select value={podFilter} onChange={(e) => setPodFilter(e.target.value)} style={{ width: 220 }}>
-            <option value="">{canManage ? 'All POD' : 'All my PODs'}</option>
-            {podOptions.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
+          <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ width: 220 }}>
+            <option value="">{canManage ? 'All Departments' : 'All my Departments'}</option>
+            {departmentOptions.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
               </option>
             ))}
           </select>
@@ -368,8 +374,9 @@ export default function SettlementPage() {
         </div>
       </div>
       <p style={{ color: 'var(--muted)', marginTop: -8, fontSize: 12 }}>
-        &quot;Create Settlement&quot; groups one POD&apos;s already bank-matched Expenses within a date range into a new draft
-        Settlement - each Expense is then approved per its Approval Level from inside the Settlement below.
+        &quot;Create Settlement&quot;: pick a Department and date range, click Search to list its already bank-matched Expenses,
+        check the ones to include, then click Generate Settlement - each Expense is then approved per its Approval Level from
+        inside the Settlement below.
       </p>
 
       {error && <div className="error-text">{error}</div>}
@@ -380,7 +387,6 @@ export default function SettlementPage() {
             <tr>
               <th>Settlement No</th>
               <th>Date</th>
-              <th>POD</th>
               <th>Department</th>
               <th>Total Transaksi</th>
               <th>Status</th>
@@ -401,8 +407,7 @@ export default function SettlementPage() {
                     </button>
                   </td>
                   <td>{formatDate(r.createdAt)}</td>
-                  <td>{r.pod?.name}</td>
-                  <td>{r.department?.name || '-'}</td>
+                  <td>{r.department?.name}</td>
                   <td>{formatCurrency(r.totalAmount)}</td>
                   <td>
                     <span className={`badge ${r.status === 'COMPLETE' ? 'badge-success' : 'badge-info'}`}>{r.status}</span>
@@ -422,7 +427,7 @@ export default function SettlementPage() {
                 </tr>
                 {expandedId === r.id && (
                   <tr>
-                    <td colSpan={7} style={{ background: 'var(--input-bg)' }}>
+                    <td colSpan={6} style={{ background: 'var(--input-bg)' }}>
                       <div style={{ padding: 8 }}>
                         <strong style={{ fontSize: 12 }}>Expenses in this settlement ({r.expenses.length})</strong>
                         {r.expenses.map((e) => {
@@ -434,7 +439,7 @@ export default function SettlementPage() {
                             !!currentStep &&
                             (currentStep.resolvedApprover?.id === user?.id ||
                               hasRole('ADMIN') ||
-                              hasPermission('expense.approve.all', 'expense.approve.ownpod'));
+                              hasPermission('expense.approve.all', 'expense.approve.owndept'));
                           return (
                             <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '4px 0' }}>
                               <div style={{ flex: 1 }}>
@@ -485,7 +490,7 @@ export default function SettlementPage() {
             ))}
             {filteredRows.length === 0 && (
               <tr>
-                <td colSpan={7} style={{ color: 'var(--muted)' }}>
+                <td colSpan={6} style={{ color: 'var(--muted)' }}>
                   No settlements
                 </td>
               </tr>
@@ -519,12 +524,12 @@ export default function SettlementPage() {
           <div style={{ minHeight: !previewResult || previewResult.expenses.length === 0 ? 480 : undefined }}>
             <div className="form-grid">
               <div className="form-row">
-                <label>POD</label>
-                <select value={genPodId} onChange={(e) => setGenPodId(e.target.value)}>
-                  <option value="">Select POD</option>
-                  {podOptions.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
+                <label>Department</label>
+                <select value={genDepartmentId} onChange={(e) => setGenDepartmentId(e.target.value)}>
+                  <option value="">Select Department</option>
+                  {departmentOptions.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
                     </option>
                   ))}
                 </select>
@@ -541,8 +546,8 @@ export default function SettlementPage() {
 
             {generateError && <div className="error-text">{generateError}</div>}
 
-            <button className="btn btn-primary" disabled={generating} style={{ marginTop: 12 }} onClick={generateSettlement}>
-              {generating ? 'Generating...' : 'Generate Settlement'}
+            <button className="btn btn-primary" disabled={searching} style={{ marginTop: 12 }} onClick={searchExpenses}>
+              {searching ? 'Searching...' : 'Search'}
             </button>
           </div>
 
@@ -550,7 +555,7 @@ export default function SettlementPage() {
             <div style={{ marginTop: 20 }}>
               {previewResult.expenses.length === 0 ? (
                 <p style={{ fontSize: 13, color: 'var(--muted)' }}>
-                  Tidak ada expense yang cocok (POD/tanggal/sudah matched) untuk dibuatkan settlement.
+                  Tidak ada expense yang cocok (Department/tanggal/sudah matched) untuk dibuatkan settlement.
                 </p>
               ) : (
                 <>
@@ -604,27 +609,29 @@ export default function SettlementPage() {
                   {showDuplicateConfirm && previewResult.existingDraftSettlement ? (
                     <div style={{ marginTop: 12, padding: 12, borderRadius: 6, background: 'var(--input-bg)' }}>
                       <p style={{ fontSize: 13, marginTop: 0 }}>
-                        Settlement sudah ada ({previewResult.existingDraftSettlement.settlementNo}), apakah Anda ingin menambahkan ke
-                        Settlement yang sudah ada atau ingin membuat settlement baru?
+                        Settlement sudah ada ({previewResult.existingDraftSettlement.settlementNo}). Apakah anda ingin menambahkan ke
+                        settlement yang sudah ada atau buat settlement baru?
                       </p>
                       <div style={{ display: 'flex', gap: 8 }}>
-                        <button className="btn" disabled={submittingSettlement} onClick={createNewSettlement}>
-                          Buat baru
+                        <button className="btn btn-primary" disabled={creatingSettlement} onClick={addSelectionToExisting}>
+                          Yes
                         </button>
-                        <button className="btn btn-primary" disabled={submittingSettlement} onClick={addSelectionToExisting}>
-                          Tambahkan
+                        <button className="btn" disabled={creatingSettlement} onClick={createNewSettlement}>
+                          No
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <button
-                      className="btn btn-primary"
-                      disabled={submittingSettlement || selectedExpenseIds.size === 0}
-                      style={{ marginTop: 12 }}
-                      onClick={submitSettlement}
-                    >
-                      {submittingSettlement ? 'Submitting...' : `Submit (${selectedExpenseIds.size})`}
-                    </button>
+                    selectedExpenseIds.size > 0 && (
+                      <button
+                        className="btn btn-primary"
+                        disabled={creatingSettlement}
+                        style={{ marginTop: 12 }}
+                        onClick={handleGenerateSettlement}
+                      >
+                        {creatingSettlement ? 'Generating...' : `Generate Settlement (${selectedExpenseIds.size})`}
+                      </button>
+                    )
                   )}
                 </>
               )}
@@ -639,7 +646,7 @@ export default function SettlementPage() {
             <p style={{ fontSize: 13, color: 'var(--muted)' }}>Loading eligible expenses...</p>
           ) : eligibleExpenses.length === 0 ? (
             <p style={{ fontSize: 13, color: 'var(--muted)' }}>
-              Tidak ada expense yang cocok (POD sama, sudah SETTLED &amp; matched, belum masuk settlement lain).
+              Tidak ada expense yang cocok (Department sama, sudah SETTLED &amp; matched, belum masuk settlement lain).
             </p>
           ) : (
             <table>
