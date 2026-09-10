@@ -1,7 +1,7 @@
 export type Theme = 'dark' | 'light';
 
 const STORAGE_KEY = 'theme';
-const DEFAULT_THEME: Theme = 'dark';
+const DEFAULT_THEME: Theme = 'light';
 
 // Inlined into <head> (see layout.tsx) so the theme attribute is set before
 // first paint - avoids a flash of the wrong theme on load.

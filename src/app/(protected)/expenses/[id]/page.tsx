@@ -126,6 +126,7 @@ interface Expense {
   participants: ParticipantRow[];
   photos: PhotoRow[];
   bankTransactions: { id: string; status: string }[];
+  isMatched: boolean;
   settlement: { id: string; settlementNo: string } | null;
 }
 
@@ -306,7 +307,7 @@ export default function ExpenseDetailPage() {
   // the next approver's step. That permission still works via the backend's
   // assertApprovalOverride if someone needs to act on someone else's step.
   const canAct = !!currentStepInfo && (currentStepInfo.resolvedApprover?.id === user?.id || hasRole('ADMIN'));
-  const canMatch = hasRole('ADMIN', 'FINANCE');
+  const canMatch = hasRole('ADMIN', 'FINANCE') || hasPermission('expense.match.all', 'expense.match.ownpod');
   const matchedTxn = expense?.bankTransactions.find((t) => MATCHED_TXN_STATUSES.includes(t.status)) ?? null;
 
   const startEditFields = () => {
@@ -452,6 +453,35 @@ export default function ExpenseDetailPage() {
     }
   };
 
+  // "Manual, no billing statement" match/unmatch - for spend that never shows up
+  // on a bank/credit-card statement line at all (e-wallet, personal cash pending
+  // reimbursement), so there's no transaction to link to.
+  const markManualMatched = async () => {
+    setMatching(true);
+    setError('');
+    try {
+      await api.post(`/bank-settlements/expenses/${id}/manual-match`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Match failed');
+    } finally {
+      setMatching(false);
+    }
+  };
+
+  const markManualUnmatched = async () => {
+    setMatching(true);
+    setError('');
+    try {
+      await api.post(`/bank-settlements/expenses/${id}/manual-unmatch`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unmatch failed');
+    } finally {
+      setMatching(false);
+    }
+  };
+
   const markMatched = async (transactionId: string) => {
     setMatching(true);
     setError('');
@@ -536,7 +566,7 @@ export default function ExpenseDetailPage() {
         <h1>{expense.expenseNo}</h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span className="badge badge-info">{expense.status}</span>
-          <span className={`badge ${matchedTxn ? 'badge-success' : 'badge-info'}`}>{matchedTxn ? 'Matched' : 'Not Matched'}</span>
+          <span className={`badge ${expense.isMatched ? 'badge-success' : 'badge-info'}`}>{expense.isMatched ? 'Matched' : 'Not Matched'}</span>
           {expense.settlement && <span className="badge badge-info">{expense.settlement.settlementNo}</span>}
           {canEditFields && (
             <button className="btn" onClick={() => (editingFields ? setEditingFields(false) : startEditFields())}>
@@ -945,24 +975,6 @@ export default function ExpenseDetailPage() {
                 </button>
               </>
             )}
-            {canMatch && (
-              <>
-                <button
-                  className="btn btn-success"
-                  disabled={matching || !!matchedTxn}
-                  onClick={() => {
-                    setShowMatchPicker(true);
-                    setMatchResults([]);
-                    setMatchSearch('');
-                  }}
-                >
-                  MATCH
-                </button>
-                <button className="btn btn-danger" disabled={matching || !matchedTxn} onClick={() => matchedTxn && markUnmatched(matchedTxn.id)}>
-                  NOT MATCH
-                </button>
-              </>
-            )}
           </div>
         </div>
       )}
@@ -1112,6 +1124,54 @@ export default function ExpenseDetailPage() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {canMatch && (
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>Bank Matching</h3>
+          {matchedTxn ? (
+            <>
+              <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--muted)' }}>
+                Linked to a billing statement transaction.
+              </div>
+              <button className="btn btn-danger" disabled={matching} onClick={() => markUnmatched(matchedTxn.id)}>
+                Unmatched
+              </button>
+            </>
+          ) : expense.isMatched ? (
+            <>
+              <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--muted)' }}>
+                Manually matched - no billing statement transaction (e.g. e-wallet / personal reimbursement to be settled directly).
+              </div>
+              <button className="btn btn-danger" disabled={matching} onClick={markManualUnmatched}>
+                Unmatched
+              </button>
+            </>
+          ) : (
+            <>
+              <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--muted)' }}>
+                Link this expense to a bank/credit-card statement line, or mark it matched directly if it won&apos;t appear on any statement
+                (e-wallet, personal cash pending reimbursement).
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  className="btn btn-success"
+                  disabled={matching}
+                  onClick={() => {
+                    setShowMatchPicker(true);
+                    setMatchResults([]);
+                    setMatchSearch('');
+                  }}
+                >
+                  Matched (link to statement)
+                </button>
+                <button className="btn" disabled={matching} onClick={markManualMatched}>
+                  Matched (no statement)
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 

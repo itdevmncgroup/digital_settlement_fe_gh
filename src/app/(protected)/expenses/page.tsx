@@ -53,10 +53,14 @@ interface ExpenseRow {
   brand: { name: string };
   department: { id: string; name: string } | null;
   bankTransactions: BankTransactionRef[];
+  isMatched: boolean;
 }
 
-function isMatched(row: { bankTransactions: { status: string }[] }) {
-  return row.bankTransactions.some((t) => MATCHED_TXN_STATUSES.includes(t.status));
+// Expense.isMatched is the source of truth (also true for a manual match with no
+// billing-statement transaction at all - e.g. e-wallet/personal reimbursement) -
+// don't re-derive it from bankTransactions, which is empty in that case.
+function isMatched(row: { isMatched: boolean }) {
+  return row.isMatched;
 }
 
 function matchedTransaction(row: { bankTransactions: BankTransactionRef[] }) {

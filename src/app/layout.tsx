@@ -12,7 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <head>
-        {/* Sets data-theme before first paint (default dark) - avoids a flash of the wrong theme. */}
+        {/* Sets data-theme before first paint (default light) - avoids a flash of the wrong theme. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
       <body>

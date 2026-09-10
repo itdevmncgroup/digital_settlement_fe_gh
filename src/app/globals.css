@@ -32,8 +32,9 @@
   --gradient-brand-soft: linear-gradient(135deg, rgba(79, 70, 229, 0.16) 0%, rgba(139, 92, 246, 0.14) 52%, rgba(239, 93, 168, 0.12) 100%);
   --gradient-text: linear-gradient(90deg, #8b93ff 0%, #c68bff 50%, #ff8ac2 100%);
 
-  /* Sidebar-only tokens: fixed to the dark palette values and NOT overridden
-     inside :root[data-theme='light'] so the sidebar always stays dark. */
+  /* Sidebar tokens: dark values here are the default (bare :root); overridden
+     inside :root[data-theme='light'] below so the nav follows the site-wide
+     theme toggle instead of staying pinned dark. */
   --sidebar-bg-1: #10121b;
   --sidebar-bg-2: #0b0d14;
   --sidebar-border: #262a3a;
@@ -42,50 +43,73 @@
   --sidebar-toggle-text-hover: #ffffff;
   --sidebar-hover-bg: #1a1e2c;
   --sidebar-active-bg: rgba(139, 123, 251, 0.16);
+  --sidebar-text: #cfd3dc;
+  --sidebar-brand-text: #ffffff;
+  --sidebar-active-text: #ffffff;
+  --sidebar-group-label: #565b70;
+  --sidebar-group-label-dots: #3a3f52;
 
-  /* Login-only tokens: fixed to the dark palette values and NOT overridden
-     inside :root[data-theme='light'] so the login page always stays dark,
-     regardless of the site-wide theme toggle. */
-  --login-bg-1: #0b0d14;
-  --login-bg-2: #151824;
-  --login-card-bg: #151824;
-  --login-border: #262a3a;
-  --login-text: #e8eaf0;
-  --login-muted: #8b8fa3;
-  --login-input-bg: #12141e;
-  --login-input-border: #262a3a;
-  --login-primary: #8b7bfb;
-  --login-accent: #ef5da8;
+  /* Login-only tokens: fixed to a light, calm palette and NOT overridden
+     inside :root[data-theme='light'] (values already match) so the login
+     page always stays light/calm, regardless of the site-wide theme toggle. */
+  --login-bg-1: #f7f7fb;
+  --login-bg-2: #eeeef6;
+  --login-card-bg: #ffffff;
+  --login-border: #e6e6ee;
+  --login-text: #171a26;
+  --login-muted: #6b7085;
+  --login-input-bg: #ffffff;
+  --login-input-border: #e0dff0;
+  --login-primary: #5850c9;
+  --login-accent: #a8577f;
 }
 
 :root[data-theme='light'] {
-  --bg: #f5f5fb;
-  --bg-elevated: #faf9fe;
+  /* Calm palette: desaturated indigo/mauve instead of the vivid violet/magenta
+     brand stops, softer neutral backgrounds - keeps contrast ratios from the
+     BRD feedback below while reading as calmer than a saturated theme. */
+  --bg: #f7f7fa;
+  --bg-elevated: #fbfbfd;
   --surface: #ffffff;
-  --surface-2: #f6f6fc;
-  --border: #e5e4f0;
-  --border-soft: #ecebf6;
+  --surface-2: #f5f5f8;
+  --border: #e6e6ee;
+  --border-soft: #eeeef3;
   --text: #171a26;
   --muted: #6b7085;
-  --primary: #5b3fe0;
-  --primary-hover: #4a30cc;
-  --primary-soft: rgba(91, 63, 224, 0.1);
-  --accent: #d6259a;
-  --danger: #d63939;
-  --success: #1fa35e;
-  --warning: #c47f0a;
+  --primary: #5850c9;
+  --primary-hover: #443dab;
+  --primary-soft: rgba(88, 80, 201, 0.1);
+  --accent: #a8577f;
+  --danger: #c94a4a;
+  --success: #22945f;
+  --warning: #b07d1f;
   --input-bg: #ffffff;
-  --table-hover: #f5f4fc;
-  --badge-bg: #efeefb;
-  --shadow-sm: 0 1px 2px rgba(30, 20, 70, 0.06);
-  --shadow-md: 0 8px 24px rgba(30, 20, 70, 0.09);
-  --shadow-glow: 0 0 0 1px rgba(91, 63, 224, 0.18), 0 8px 24px rgba(91, 63, 224, 0.1);
+  --table-hover: #f5f5f9;
+  --badge-bg: #efeef5;
+  --shadow-sm: 0 1px 2px rgba(30, 20, 70, 0.05);
+  --shadow-md: 0 8px 24px rgba(30, 20, 70, 0.07);
+  --shadow-glow: 0 0 0 1px rgba(88, 80, 201, 0.16), 0 8px 24px rgba(88, 80, 201, 0.08);
   /* Darker than the dark theme's own stops - the light page background needs
      more contrast behind the buttons' hardcoded white text (#8b5cf6 alone was
      only ~3:1 against white, unreadable per BRD feedback). */
-  --gradient-brand: linear-gradient(135deg, #4338ca 0%, #7c3aed 52%, #be185d 100%);
-  --gradient-brand-soft: linear-gradient(135deg, rgba(79, 70, 229, 0.1) 0%, rgba(139, 92, 246, 0.08) 52%, rgba(219, 42, 146, 0.07) 100%);
-  --gradient-text: linear-gradient(90deg, #4f46e5 0%, #8b5cf6 50%, #db2a92 100%);
+  --gradient-brand: linear-gradient(135deg, #4b4fab 0%, #6e5fc0 52%, #a1567f 100%);
+  --gradient-brand-soft: linear-gradient(135deg, rgba(75, 79, 171, 0.09) 0%, rgba(110, 95, 192, 0.07) 52%, rgba(161, 86, 127, 0.06) 100%);
+  --gradient-text: linear-gradient(90deg, #4b4fab 0%, #6e5fc0 50%, #a1567f 100%);
+
+  /* Sidebar follows the light+calm palette here instead of staying pinned dark. */
+  --sidebar-bg-1: #ffffff;
+  --sidebar-bg-2: #f6f6fb;
+  --sidebar-border: #e6e6ee;
+  --sidebar-toggle-bg: #efeef5;
+  --sidebar-toggle-text: #6b7085;
+  --sidebar-toggle-text-hover: #171a26;
+  --sidebar-hover-bg: #f0eff8;
+  --sidebar-active-bg: rgba(88, 80, 201, 0.12);
+  --sidebar-text: #4b4f63;
+  --sidebar-brand-text: #171a26;
+  --sidebar-active-text: #171a26;
+  --sidebar-group-label: #8b8fa0;
+  --sidebar-group-label-dots: #c7c6d6;
 }
 
 * {
@@ -143,7 +167,7 @@ h1, h2, h3 {
   width: var(--sidebar-w);
   background: linear-gradient(180deg, var(--sidebar-bg-1) 0%, var(--sidebar-bg-2) 65%, var(--sidebar-bg-2) 100%), var(--gradient-brand-soft);
   background-blend-mode: normal, overlay;
-  color: #cfd3dc;
+  color: var(--sidebar-text);
   padding: 14px 0 16px;
   flex-shrink: 0;
   border-right: 1px solid var(--sidebar-border);
@@ -181,7 +205,7 @@ h1, h2, h3 {
 
 .sidebar .brand {
   font-weight: 800;
-  color: #fff;
+  color: var(--sidebar-brand-text);
   font-size: 14.5px;
   display: flex;
   align-items: center;
@@ -243,7 +267,7 @@ h1, h2, h3 {
   align-items: center;
   gap: 10px;
   padding: 9px 10px;
-  color: #b8bccb;
+  color: var(--sidebar-text);
   font-size: 13px;
   font-weight: 500;
   border-radius: 8px;
@@ -275,12 +299,12 @@ h1, h2, h3 {
 
 .sidebar nav a:hover {
   background: var(--sidebar-hover-bg);
-  color: #fff;
+  color: var(--sidebar-active-text);
 }
 
 .sidebar nav a.active {
   background: var(--sidebar-active-bg);
-  color: #fff;
+  color: var(--sidebar-active-text);
 }
 
 .sidebar nav a.active::before {
@@ -303,7 +327,7 @@ h1, h2, h3 {
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #565b70;
+  color: var(--sidebar-group-label);
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
@@ -321,7 +345,7 @@ h1, h2, h3 {
 .sidebar.collapsed .group-label::after {
   content: '\2022\2022\2022';
   letter-spacing: 2px;
-  color: #3a3f52;
+  color: var(--sidebar-group-label-dots);
 }
 
 .main {

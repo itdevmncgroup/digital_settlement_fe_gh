@@ -30,7 +30,7 @@ interface SettlementExpenseRow {
   amount: string;
   status: string;
   sales: { name: string };
-  bankTransactions: { id: string; status: string }[];
+  isMatched: boolean;
   approvalRequest: ApprovalRequestInfo | null;
 }
 
@@ -44,8 +44,6 @@ interface SettlementRow {
   createdBy: { name: string };
   expenses: SettlementExpenseRow[];
 }
-
-const MATCHED_TXN_STATUSES = ['AUTO_MATCHED', 'MANUAL_MATCHED'];
 
 interface DepartmentOption {
   id: string;
@@ -142,23 +140,6 @@ export default function SettlementPage() {
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to mark complete');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Approve = re-affirm the transaction's existing match (manualMatch is
-  // idempotent against the same expenseId); Reject = unmatch it. Both reuse
-  // BankMatchingService's endpoints, same as the Expense detail page's
-  // MATCH/NOT MATCH buttons and the Bank Matching Detail page.
-  const approveTxn = async (transactionId: string, expenseId: string) => {
-    setBusy(true);
-    setError('');
-    try {
-      await api.post(`/bank-settlements/transactions/${transactionId}/match`, { expenseId });
-      load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Approve failed');
     } finally {
       setBusy(false);
     }
@@ -297,19 +278,6 @@ export default function SettlementPage() {
     }
   };
 
-  const rejectTxn = async (transactionId: string) => {
-    setBusy(true);
-    setError('');
-    try {
-      await api.post(`/bank-settlements/transactions/${transactionId}/unmatch`);
-      load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Reject failed');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   // Per-Expense approval, one level step at a time - same ApprovalsService flow
   // (and the same endpoints) as the Approve/Reject buttons on the Expense detail
   // page, just surfaced here so an approver can clear an Expense's approval
@@ -431,8 +399,11 @@ export default function SettlementPage() {
                       <div style={{ padding: 8 }}>
                         <strong style={{ fontSize: 12 }}>Expenses in this settlement ({r.expenses.length})</strong>
                         {r.expenses.map((e) => {
-                          const txn = e.bankTransactions[0];
-                          const matched = !!txn && MATCHED_TXN_STATUSES.includes(txn.status);
+                          // isMatched is the source of truth - also true for a manual
+                          // match with no billing-statement transaction at all (e.g.
+                          // e-wallet/personal reimbursement), which bankTransactions
+                          // alone wouldn't show.
+                          const matched = e.isMatched;
                           const approval = e.approvalRequest;
                           const currentStep = approval && approval.status === 'PENDING' ? approval.steps.find((s) => s.stepOrder === approval.currentStep) : null;
                           const canActOnExpense =
@@ -459,25 +430,7 @@ export default function SettlementPage() {
                                   </button>
                                 </>
                               )}
-                              {txn && (
-                                <>
-                                  <span className={`badge ${matched ? 'badge-success' : 'badge-info'}`}>{matched ? 'Matched' : 'Not Matched'}</span>
-                                  {canManage && (
-                                    <>
-                                      <button
-                                        className="btn btn-success"
-                                        disabled={busy || txn.status === 'MANUAL_MATCHED'}
-                                        onClick={() => approveTxn(txn.id, e.id)}
-                                      >
-                                        Approve Match
-                                      </button>
-                                      <button className="btn btn-danger" disabled={busy || txn.status === 'UNMATCHED'} onClick={() => rejectTxn(txn.id)}>
-                                        Reject Match
-                                      </button>
-                                    </>
-                                  )}
-                                </>
-                              )}
+                              <span className={`badge ${matched ? 'badge-success' : 'badge-info'}`}>{matched ? 'Matched' : 'Not Matched'}</span>
                             </div>
                           );
                         })}

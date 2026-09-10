@@ -89,7 +89,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
-  const [theme, setThemeState] = useState<Theme>('dark');
+  const [theme, setThemeState] = useState<Theme>('light');
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
