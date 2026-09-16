@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "TODO_APPLE_TEAM_ID.com.mncgroup.digitalSettlement",
+        "paths": ["/settlement", "/expenses/*", "/events/*"]
+      }
+    ]
+  }
+}

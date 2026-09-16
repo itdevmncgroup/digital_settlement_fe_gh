@@ -67,7 +67,7 @@ export default function Modal({ title, onClose, children, wide }: ModalProps) {
             × Close
           </button>
         </div>
-        <div style={{ padding: 16, overflowY: 'auto' }}>{children}</div>
+        <div style={{ padding: 16, overflowY: 'auto', overflowX: 'auto' }}>{children}</div>
       </div>
     </div>
   );

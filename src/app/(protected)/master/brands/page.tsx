@@ -41,7 +41,7 @@ export default function BrandsPage() {
   const load = () => {
     const qs = search ? `?search=${encodeURIComponent(search)}` : '';
     api.get<Brand[]>(`/brands${qs}`).then(setBrands).catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
-    api.get<AdvertiserOption[]>('/advertisers').then(setAdvertisers).catch(() => undefined);
+    api.get<AdvertiserOption[]>('/advertisers?active=true').then(setAdvertisers).catch(() => undefined);
   };
 
   useEffect(load, [search]);

@@ -808,3 +808,120 @@ label {
   border-color: var(--login-input-border);
   color: var(--login-text);
 }
+
+/* ---------- Mobile / responsive ---------- */
+
+.hamburger-btn {
+  display: none;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
+/* Tables live inside .card without a dedicated scroll wrapper - letting the
+   card itself scroll horizontally keeps wide tables from blowing out page
+   width on narrow viewports, without touching every page that renders one. */
+.card {
+  overflow-x: auto;
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 50;
+    width: 240px !important;
+    transform: translateX(-100%);
+    box-shadow: var(--shadow-md);
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-toggle {
+    display: none;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(6, 7, 12, 0.55);
+    z-index: 40;
+  }
+
+  .hamburger-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+  }
+
+  .topbar {
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  .topbar > div:first-child {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .topbar > div:first-child strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .theme-toggle span,
+  .theme-toggle {
+    font-size: 12px;
+    padding: 7px 9px;
+  }
+
+  .content {
+    padding: 14px;
+  }
+
+  .card {
+    padding: 14px;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  th, td {
+    padding: 8px 10px;
+    font-size: 12.5px;
+  }
+
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 480px) {
+  .stat-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .theme-toggle span {
+    display: none;
+  }
+}

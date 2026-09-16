@@ -4,7 +4,7 @@ Next.js 14 (App Router) frontend for the [`digital_settlement_be`](../digital_se
 API. Covers the Web Admin surface for Admin/Finance/Supervisor/Management: Dashboard
 (date-range filter, expense-by-department charts), Transactions (Pre-Event, Expenses,
 Approvals), Settlement (batching + approval), Bank-Matching (statement upload + review),
-Master Data (Unit, Department, Position, Role, Permission, Credit Card, Agency, Advertiser,
+Master Data (Unit, Department, Position, Role, Permission, Corporate Card, Agency, Advertiser,
 Brand, Activity Type), Import (Excel/CSV/PDF with downloadable templates), Approval Level
 config, Users, Audit Log.
 

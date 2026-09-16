@@ -44,7 +44,7 @@ export default function AdvertisersPage() {
       .get<Advertiser[]>(`/advertisers${qs}`)
       .then(setAdvertisers)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
-    api.get<AgencyOption[]>('/agencies').then(setAgencies).catch(() => undefined);
+    api.get<AgencyOption[]>('/agencies?active=true').then(setAgencies).catch(() => undefined);
   };
 
   useEffect(load, [search]);

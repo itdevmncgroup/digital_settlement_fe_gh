@@ -86,6 +86,13 @@ const ICONS: Record<string, ReactNode> = {
       <path d="M18 12h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-2a2 2 0 0 1 0-4z" />
     </>
   ),
+  'payment-method': (
+    <>
+      <path d="M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M3 10h18" />
+      <line x1="6" y1="15" x2="10" y2="15" />
+    </>
+  ),
   role: <path d="M12 2 3 6v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V6z" />,
   permission: (
     <>

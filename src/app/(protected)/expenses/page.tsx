@@ -1,9 +1,11 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError, uploadFile, downloadFile } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { useAutoMatch, ScannedBatch, ScannedTransactionRow } from '@/lib/autoMatch';
 import { formatDate } from '@/lib/date';
 import NumberInput from '@/components/NumberInput';
 import DatePicker from '@/components/DatePicker';
@@ -17,27 +19,21 @@ import { NavIcon } from '@/components/NavIcons';
 
 const MATCHED_TXN_STATUSES = ['AUTO_MATCHED', 'MANUAL_MATCHED'];
 
+// Default view: all statuses, last 1 month - also what "Reset" restores.
+function defaultFromDate() {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 1);
+  return d.toISOString().slice(0, 10);
+}
+function defaultToDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 interface BankTransactionRef {
   id: string;
   status: string;
   batchId: string;
   batch: { id: string; fileName: string };
-}
-
-interface ScannedTransactionRow {
-  id: string;
-  transactionDate: string | null;
-  rawDescription: string;
-  amount: string;
-  status: 'UNMATCHED' | 'AUTO_MATCHED' | 'REVIEW_REQUIRED' | 'MANUAL_MATCHED';
-  matchedExpense: { expenseNo: string; sales?: { name: string } } | null;
-}
-
-interface ScannedBatch {
-  id: string;
-  fileName: string;
-  transactions: ScannedTransactionRow[];
-  alreadyScanned?: boolean;
 }
 
 interface ExpenseRow {
@@ -74,16 +70,11 @@ interface SimpleOption {
   name: string;
 }
 
-const PAYMENT_METHOD_OPTIONS: { value: string; label: string }[] = [
-  { value: 'CREDIT_CARD', label: 'Credit Card' },
-  { value: 'GOPAY', label: 'GoPay' },
-  { value: 'SHOPEEPAY', label: 'ShopeePay' },
-  { value: 'DANA', label: 'Dana' },
-  { value: 'OVO', label: 'OVO' },
-  { value: 'BANK_TRANSFER', label: 'Bank Transfer' },
-  { value: 'CASH', label: 'Cash' },
-  { value: 'OTHER', label: 'Others' },
-];
+interface PaymentMethodOption {
+  id: string;
+  code: string;
+  name: string;
+}
 
 interface SalesOption {
   id: string;
@@ -242,42 +233,60 @@ function LocalFileZoom({ file }: { file: File }) {
 }
 
 export default function ExpensesPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <ExpensesPageInner />
+    </Suspense>
+  );
+}
+
+function ExpensesPageInner() {
   const { hasRole, hasPermission, user } = useAuth();
   const canActOnBehalf = hasRole('ADMIN', 'FINANCE');
   const canCreate = hasRole('SALES') || canActOnBehalf || hasPermission('expense.create');
   const canAutoMatch = canActOnBehalf || hasPermission('expense.automatch');
   const canExport = canActOnBehalf || hasPermission('expense.export');
 
+  // Filters live in the URL (not just component state) so browser Back from
+  // an expense's detail page - which lands on a fresh instance of this page,
+  // not a cached one - restores the exact same list instead of resetting to
+  // the hardcoded defaults (see expenses/[id]/page.tsx's Back button).
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
   const [rows, setRows] = useState<ExpenseRow[]>([]);
-  // Default view: all statuses, last 1 month.
-  const [status, setStatus] = useState(ALL_STATUSES_VALUE);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
+  // Default view: all statuses, last 1 month - see defaultFromDate/defaultToDate.
+  const [status, setStatus] = useState(() => searchParams.get('status') ?? ALL_STATUSES_VALUE);
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? '');
+  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '');
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const [departmentFilter, setDepartmentFilter] = useState('');
-  const [fromDate, setFromDate] = useState(() => {
-    const d = new Date();
-    d.setMonth(d.getMonth() - 1);
-    return d.toISOString().slice(0, 10);
-  });
-  const [toDate, setToDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [matchedFilter, setMatchedFilter] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState(() => searchParams.get('departmentId') ?? '');
+  const [fromDate, setFromDate] = useState(() => searchParams.get('fromDate') ?? defaultFromDate());
+  const [toDate, setToDate] = useState(() => searchParams.get('toDate') ?? defaultToDate());
+  const [matchedFilter, setMatchedFilter] = useState(() => searchParams.get('matched') ?? '');
   const [filterDepartmentOptions, setFilterDepartmentOptions] = useState<DepartmentOption[]>([]);
   const [showAutoMatchModal, setShowAutoMatchModal] = useState(false);
   const [autoMatchFiles, setAutoMatchFiles] = useState<File[]>([]);
-  const [matching, setMatching] = useState(false);
-  const [matchMessage, setMatchMessage] = useState('');
-  const [matchedBatches, setMatchedBatches] = useState<ScannedBatch[]>([]);
   const [forceRescan, setForceRescan] = useState(false);
+  const {
+    running: matching,
+    message: matchMessage,
+    error: matchError,
+    batches: matchedBatches,
+    version: matchVersion,
+    start: startAutoMatch,
+  } = useAutoMatch();
 
   const [salesOptions, setSalesOptions] = useState<SalesOption[]>([]);
   const [onBehalfOfSalesId, setOnBehalfOfSalesId] = useState('');
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
   const [creditCardOptions, setCreditCardOptions] = useState<CreditCardOption[]>([]);
+  const [paymentMethodOptions, setPaymentMethodOptions] = useState<PaymentMethodOption[]>([]);
   const [advertiserOptions, setAdvertiserOptions] = useState<AdvertiserOption[]>([]);
   const [agencyOptions, setAgencyOptions] = useState<AgencyOption[]>([]);
   const [brandOptions, setBrandOptions] = useState<BrandOption[]>([]);
@@ -294,7 +303,7 @@ export default function ExpensesPage() {
     departmentId: '',
     unitId: '',
     activityTypeId: '',
-    paymentMethodType: '',
+    paymentMethodId: '',
     paymentMethodNote: '',
     creditCardId: '',
     merchantName: '',
@@ -333,10 +342,40 @@ export default function ExpensesPage() {
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
   };
 
-  useEffect(load, [status, search, departmentFilter, fromDate, toDate, matchedFilter]);
+  useEffect(() => {
+    load();
+    // Mirror the same filters into the URL - what makes Back from an expense's
+    // detail page land on this exact list again instead of the defaults.
+    const qs = buildListParams().toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, search, departmentFilter, fromDate, toDate, matchedFilter]);
+
+  const resetFilters = () => {
+    setStatus(ALL_STATUSES_VALUE);
+    setSearch('');
+    setSearchInput('');
+    setDepartmentFilter('');
+    setFromDate(defaultFromDate());
+    setToDate(defaultToDate());
+    setMatchedFilter('');
+  };
+
+  // Bumps every time a file finishes auto-matching (see AutoMatchProvider) - refreshes
+  // the table's Matching column live, whether that run started here or on another page,
+  // and even if it kept running in the background while the user navigated away.
+  const isFirstMatchVersion = useRef(true);
+  useEffect(() => {
+    if (isFirstMatchVersion.current) {
+      isFirstMatchVersion.current = false;
+      return;
+    }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchVersion]);
 
   useEffect(() => {
-    const path = canActOnBehalf ? '/departments' : '/departments/me';
+    const path = canActOnBehalf ? '/departments?active=true' : '/departments/me';
     api.get<DepartmentOption[]>(path).then(setFilterDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canActOnBehalf]);
@@ -387,20 +426,21 @@ export default function ExpensesPage() {
   };
 
   useEffect(() => {
-    api.get<AdvertiserOption[]>('/advertisers').then(setAdvertiserOptions).catch(() => undefined);
-    api.get<AgencyOption[]>('/agencies').then(setAgencyOptions).catch(() => undefined);
-    api.get<SimpleOption[]>('/units').then(setUnitOptions).catch(() => undefined);
-    api.get<SimpleOption[]>('/activity-types').then(setActivityTypeOptions).catch(() => undefined);
+    api.get<AdvertiserOption[]>('/advertisers?active=true').then(setAdvertiserOptions).catch(() => undefined);
+    api.get<AgencyOption[]>('/agencies?active=true').then(setAgencyOptions).catch(() => undefined);
+    api.get<SimpleOption[]>('/units?active=true').then(setUnitOptions).catch(() => undefined);
+    api.get<SimpleOption[]>('/activity-types?active=true').then(setActivityTypeOptions).catch(() => undefined);
+    api.get<PaymentMethodOption[]>('/payment-methods?active=true').then(setPaymentMethodOptions).catch(() => undefined);
   }, []);
 
-  // 1 Department = 1 credit card - the Credit Card dropdown only ever lists the card(s)
+  // 1 Department = 1 credit card - the Corporate Card dropdown only ever lists the card(s)
   // belonging to whichever Department is currently picked on the form.
   useEffect(() => {
     if (!form.departmentId) {
       setCreditCardOptions([]);
       return;
     }
-    api.get<CreditCardOption[]>(`/credit-cards?departmentId=${form.departmentId}`).then(setCreditCardOptions).catch(() => undefined);
+    api.get<CreditCardOption[]>(`/credit-cards?departmentId=${form.departmentId}&active=true`).then(setCreditCardOptions).catch(() => undefined);
   }, [form.departmentId]);
 
   // Brand options narrow to whichever Advertisers are currently selected above,
@@ -412,7 +452,7 @@ export default function ExpensesPage() {
       return;
     }
     api
-      .get<BrandOption[]>(`/brands?advertiserIds=${selectedAdvertiserIds}`)
+      .get<BrandOption[]>(`/brands?advertiserIds=${selectedAdvertiserIds}&active=true`)
       .then(setBrandOptions)
       .catch(() => undefined);
   }, [selectedAdvertiserIds]);
@@ -423,7 +463,7 @@ export default function ExpensesPage() {
       setDepartmentOptions([]);
       return;
     }
-    const path = canActOnBehalf ? `/departments?salesId=${targetSalesId}` : '/departments/me';
+    const path = canActOnBehalf ? `/departments?salesId=${targetSalesId}&active=true` : '/departments/me';
     api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
   }, [canActOnBehalf, onBehalfOfSalesId, user?.id]);
 
@@ -445,7 +485,7 @@ export default function ExpensesPage() {
   }, [canActOnBehalf, onBehalfOfSalesId, salesOptions, user?.unitId]);
 
   useEffect(() => {
-    api.get<CategoryOption[]>('/expense-categories').then(setCategories).catch(() => undefined);
+    api.get<CategoryOption[]>('/expense-categories?active=true').then(setCategories).catch(() => undefined);
     if (canActOnBehalf) {
       api
         .get<SalesOption[]>('/users')
@@ -463,7 +503,7 @@ export default function ExpensesPage() {
       departmentId: '',
       unitId: '',
       activityTypeId: '',
-      paymentMethodType: '',
+      paymentMethodId: '',
       paymentMethodNote: '',
       creditCardId: '',
       merchantName: '',
@@ -590,12 +630,13 @@ export default function ExpensesPage() {
     setSaving(true);
     setError('');
     try {
+      const selectedPaymentMethod = paymentMethodOptions.find((m) => m.id === form.paymentMethodId);
       const payload: Record<string, unknown> = {
         ...form,
         amount: Number(form.amount),
         departmentId: form.departmentId || undefined,
-        creditCardId: form.paymentMethodType === 'CREDIT_CARD' ? form.creditCardId || undefined : undefined,
-        paymentMethodType: form.paymentMethodType || undefined,
+        creditCardId: selectedPaymentMethod?.code === 'CORPORATE_CARD' ? form.creditCardId || undefined : undefined,
+        paymentMethodId: form.paymentMethodId || undefined,
         paymentMethodNote: form.paymentMethodNote || undefined,
         advertiserId: primaryAdvertiserId,
         brandId: primaryBrandId,
@@ -661,41 +702,13 @@ export default function ExpensesPage() {
     }
   };
 
-  // Uploads each PDF one at a time (the endpoint only takes one file per call), then
-  // refreshes the list so Matched/Unmatched picks up whatever got reconciled. A file
-  // already scanned before is not reparsed - the backend returns its existing batch
-  // (alreadyScanned: true) - unless "Scan ulang" was checked in the upload modal.
-  const runAutoMatch = async (files: File[]) => {
-    setMatching(true);
-    setMatchMessage('');
-    setMatchedBatches([]);
-    setError('');
-    try {
-      const batches: ScannedBatch[] = [];
-      for (const file of files) {
-        batches.push((await uploadFile('/bank-settlements', file, forceRescan ? '?force=true' : '')) as ScannedBatch);
-      }
-      setMatchedBatches(batches);
-      const reused = batches.filter((b) => b.alreadyScanned).length;
-      setMatchMessage(
-        reused > 0
-          ? `Matching finished for ${files.length} file(s) - ${reused} sudah pernah discan sebelumnya (hasil lama ditampilkan).`
-          : `Matching finished for ${files.length} file(s).`,
-      );
-      load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Auto match failed');
-    } finally {
-      setMatching(false);
-    }
-  };
-
   const noSalesReason = canActOnBehalf && !onBehalfOfSalesId ? 'Pick a Sales to fill in this expense on their behalf.' : null;
   // Advertiser/Brand have no single inherited value anymore (Pre-Event is retired) -
   // the first entry picked in the Advertiser/Brand lists below becomes the primary
   // (mandatory) one, the rest are "additional".
   const primaryAdvertiserId = selectedAdvertisers[0]?.id;
   const primaryBrandId = selectedBrands[0]?.id;
+  const selectedPaymentMethodCode = paymentMethodOptions.find((m) => m.id === form.paymentMethodId)?.code;
 
   return (
     <div>
@@ -769,19 +782,18 @@ export default function ExpensesPage() {
             <option value="MATCHED">Matched</option>
             <option value="UNMATCHED">Not Matched</option>
           </select>
+          <button type="button" className="btn" onClick={resetFilters}>
+            Reset
+          </button>
         </div>
       </div>
 
-      {matching && (
-        <div className="card" style={{ marginBottom: 12, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>⏳</span> Matching in progress — scanning uploaded PDF(s) against expenses...
-        </div>
-      )}
       {matchMessage && !matching && (
         <div className="card" style={{ marginBottom: 12, fontSize: 13 }}>
           {matchMessage}
         </div>
       )}
+      {matchError && !matching && <div className="error-text" style={{ marginBottom: 12 }}>{matchError}</div>}
       {matchedBatches.length > 0 && !matching && (
         <div className="card" style={{ marginBottom: 12 }}>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>Scanned Data</h3>
@@ -859,15 +871,15 @@ export default function ExpensesPage() {
           <button
             className="btn btn-primary"
             style={{ marginTop: 12 }}
-            disabled={autoMatchFiles.length === 0}
+            disabled={autoMatchFiles.length === 0 || matching}
             onClick={() => {
               const files = autoMatchFiles;
               setShowAutoMatchModal(false);
               setAutoMatchFiles([]);
-              runAutoMatch(files);
+              startAutoMatch(files, forceRescan);
             }}
           >
-            Upload &amp; Match
+            {matching ? 'A match is already running...' : 'Upload & Match'}
           </button>
         </Modal>
       )}
@@ -981,20 +993,20 @@ export default function ExpensesPage() {
                 <div className="form-row">
                   <label>Payment Method</label>
                   <select
-                    value={form.paymentMethodType}
-                    onChange={(e) => setForm({ ...form, paymentMethodType: e.target.value, creditCardId: '', paymentMethodNote: '' })}
+                    value={form.paymentMethodId}
+                    onChange={(e) => setForm({ ...form, paymentMethodId: e.target.value, creditCardId: '', paymentMethodNote: '' })}
                   >
                     <option value="">- (optional)</option>
-                    {PAYMENT_METHOD_OPTIONS.map((m) => (
-                      <option key={m.value} value={m.value}>
-                        {m.label}
+                    {paymentMethodOptions.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
                       </option>
                     ))}
                   </select>
                 </div>
-                {form.paymentMethodType === 'CREDIT_CARD' && (
+                {selectedPaymentMethodCode === 'CORPORATE_CARD' && (
                   <div className="form-row">
-                    <label>Credit Card</label>
+                    <label>Corporate Card</label>
                     <select
                       required
                       disabled={!form.departmentId}
@@ -1011,20 +1023,10 @@ export default function ExpensesPage() {
                     {!form.departmentId && <span style={{ fontSize: 12, color: 'var(--muted)' }}>Select a Department first.</span>}
                   </div>
                 )}
-                {['GOPAY', 'SHOPEEPAY', 'DANA', 'OVO'].includes(form.paymentMethodType) && (
+                {selectedPaymentMethodCode && selectedPaymentMethodCode !== 'CORPORATE_CARD' && (
                   <div className="form-row">
-                    <label style={{ fontSize: 12 }}>Account / Phone Number (optional)</label>
+                    <label style={{ fontSize: 12 }}>Note (optional)</label>
                     <input
-                      value={form.paymentMethodNote}
-                      onChange={(e) => setForm({ ...form, paymentMethodNote: e.target.value })}
-                    />
-                  </div>
-                )}
-                {form.paymentMethodType === 'OTHER' && (
-                  <div className="form-row">
-                    <label style={{ fontSize: 12 }}>Please specify</label>
-                    <input
-                      required
                       value={form.paymentMethodNote}
                       onChange={(e) => setForm({ ...form, paymentMethodNote: e.target.value })}
                     />

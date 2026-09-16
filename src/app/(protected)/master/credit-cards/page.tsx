@@ -49,7 +49,7 @@ export default function CreditCardsPage() {
 
   useEffect(load, []);
   useEffect(() => {
-    api.get<DepartmentOption[]>('/departments').then(setDepartmentOptions).catch(() => undefined);
+    api.get<DepartmentOption[]>('/departments?active=true').then(setDepartmentOptions).catch(() => undefined);
   }, []);
 
   const closeForm = () => {
@@ -87,7 +87,7 @@ export default function CreditCardsPage() {
   return (
     <div>
       <div className="toolbar">
-        <h1>Credit Card</h1>
+        <h1>Corporate Card</h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <SearchBox
             placeholder="Search bank, last 4, card holder, department..."
@@ -97,7 +97,7 @@ export default function CreditCardsPage() {
           />
           {canManage && (
             <button className="btn btn-primary" onClick={() => (showForm ? closeForm() : setShowForm(true))}>
-              {showForm ? 'Cancel' : '+ New Credit Card'}
+              {showForm ? 'Cancel' : '+ New Corporate Card'}
             </button>
           )}
         </div>
@@ -105,7 +105,7 @@ export default function CreditCardsPage() {
 
       {showForm && (
         <form className="card" onSubmit={onSubmit}>
-          <h3 style={{ marginTop: 0 }}>{editingId ? 'Edit Credit Card' : 'New Credit Card'}</h3>
+          <h3 style={{ marginTop: 0 }}>{editingId ? 'Edit Corporate Card' : 'New Corporate Card'}</h3>
           <div className="form-grid">
             <div className="form-row">
               <label>Bank</label>

@@ -31,6 +31,9 @@ shim, for the same Windows path-shim-breakage reason as the backend — follow t
 for any new script, don't switch to `npx`.
 
 Runs on port **3001** (backend owns 3000). Requires the backend running first.
+`next.config.js` rewrites `/api/v1/*` to `BACKEND_URL` (default `http://localhost:3000`),
+so with `NEXT_PUBLIC_API_URL=/api/v1` (`.env.local.example` default) the browser only ever
+talks to port 3001 — the backend port stays internal to the rewrite.
 
 ## Auth
 
@@ -87,7 +90,8 @@ Server Components patterns apply beyond the root layout.
 
 - Path alias `@/*` → `./src/*` (`tsconfig.json`).
 - `.env.local.example` → `NEXT_PUBLIC_API_URL` (default `http://localhost:3000/api/v1`),
-  `SESSION_TIMEOUT` (idle timeout minutes).
+  `NEXT_PUBLIC_SESSION_TIMEOUT` (idle timeout in minutes; `0` disables auto-logout -
+  see `useIdleLogout` in `src/lib/useIdleLogout.ts`, wired up in `AppShell.tsx`).
 - Mirrors the backend's endpoint shapes and error format 1:1 — check
   `digital_settlement_be`'s controller/DTO before inventing a new request/response shape.
 

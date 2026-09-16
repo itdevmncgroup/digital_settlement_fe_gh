@@ -1,7 +1,8 @@
 'use client';
 
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/date';
@@ -77,6 +78,15 @@ const defaultFromDate = () => {
 const defaultToDate = () => new Date().toISOString().slice(0, 10);
 
 export default function SettlementPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <SettlementPageInner />
+    </Suspense>
+  );
+}
+
+function SettlementPageInner() {
+  const searchParams = useSearchParams();
   const { user, hasRole, hasPermission } = useAuth();
   const canManage = hasRole('ADMIN', 'FINANCE');
   const canGenerate = hasRole('SALES') || canManage || hasPermission('settlement.create.owndept');
@@ -126,8 +136,19 @@ export default function SettlementPage() {
 
   useEffect(load, [departmentFilter]);
 
+  // Lands here from the settlement approval email/push deep link
+  // (`${APP_PUBLIC_URL}/settlement?open=<id>`, see approvals.service.ts
+  // notifyStep) - auto-expand and scroll to that row once it's loaded.
   useEffect(() => {
-    const path = canManage ? '/departments' : '/departments/me';
+    const open = searchParams.get('open');
+    if (!open || rows.length === 0) return;
+    setExpandedId(open);
+    document.getElementById(`settlement-row-${open}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, rows]);
+
+  useEffect(() => {
+    const path = canManage ? '/departments?active=true' : '/departments/me';
     api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canManage]);
@@ -364,7 +385,7 @@ export default function SettlementPage() {
           <tbody>
             {pagination.pageRows.map((r) => (
               <Fragment key={r.id}>
-                <tr>
+                <tr id={`settlement-row-${r.id}`}>
                   <td>
                     <button
                       type="button"

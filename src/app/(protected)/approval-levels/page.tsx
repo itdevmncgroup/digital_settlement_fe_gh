@@ -28,7 +28,8 @@ interface ApprovalLevel {
   name: string;
   documentStage: 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT';
   scopeType: 'ANY' | 'DEPARTMENT';
-  department: Option | null;
+  departments: { departmentId: string; department: Option }[];
+  requestorPositions: { positionId: string; position: Option }[];
   minAmount: string;
   maxAmount: string | null;
   isActive: boolean;
@@ -58,7 +59,8 @@ export default function ApprovalLevelsPage() {
     name: '',
     documentStage: 'EXPENSES' as 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT',
     scopeType: 'ANY' as 'ANY' | 'DEPARTMENT',
-    departmentId: '',
+    departmentIds: [] as string[],
+    requestorPositionIds: [] as string[],
     minAmount: '0',
     maxAmount: '',
     isActive: true,
@@ -71,14 +73,14 @@ export default function ApprovalLevelsPage() {
   const filteredLevels = levels.filter((l) => {
     if (!search) return true;
     const q = search.toLowerCase();
-    return [l.name, l.department?.name].some((v) => v?.toLowerCase().includes(q));
+    return [l.name, ...l.departments.map((d) => d.department.name)].some((v) => v?.toLowerCase().includes(q));
   });
   const pagination = usePagination(filteredLevels);
 
   const load = () => {
     api.get<ApprovalLevel[]>('/approval-levels').then(setLevels).catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
-    api.get<Option[]>('/positions').then(setPositions).catch(() => undefined);
-    api.get<Option[]>('/departments').then((res) => setDepartments(sortDepartments(res))).catch(() => undefined);
+    api.get<Option[]>('/positions?active=true').then(setPositions).catch(() => undefined);
+    api.get<Option[]>('/departments?active=true').then((res) => setDepartments(sortDepartments(res))).catch(() => undefined);
   };
 
   useEffect(load, []);
@@ -86,7 +88,17 @@ export default function ApprovalLevelsPage() {
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
-    setForm({ name: '', documentStage: 'EXPENSES', scopeType: 'ANY', departmentId: '', minAmount: '0', maxAmount: '', isActive: true, stepPositionIds: [] });
+    setForm({
+      name: '',
+      documentStage: 'EXPENSES',
+      scopeType: 'ANY',
+      departmentIds: [],
+      requestorPositionIds: [],
+      minAmount: '0',
+      maxAmount: '',
+      isActive: true,
+      stepPositionIds: [],
+    });
     setPickerPositionId('');
   };
 
@@ -96,13 +108,30 @@ export default function ApprovalLevelsPage() {
       name: l.name,
       documentStage: l.documentStage,
       scopeType: l.scopeType,
-      departmentId: l.department?.id ?? '',
+      departmentIds: l.departments.map((d) => d.departmentId),
+      requestorPositionIds: l.requestorPositions.map((p) => p.positionId),
       minAmount: l.minAmount,
       maxAmount: l.maxAmount ?? '',
       isActive: l.isActive,
       stepPositionIds: [...l.steps].sort((a, b) => a.stepOrder - b.stepOrder).map((s) => s.position.id),
     });
     setShowForm(true);
+  };
+
+  const toggleDepartment = (id: string) => {
+    setForm((f) => ({
+      ...f,
+      departmentIds: f.departmentIds.includes(id) ? f.departmentIds.filter((d) => d !== id) : [...f.departmentIds, id],
+    }));
+  };
+
+  const toggleRequestorPosition = (id: string) => {
+    setForm((f) => ({
+      ...f,
+      requestorPositionIds: f.requestorPositionIds.includes(id)
+        ? f.requestorPositionIds.filter((p) => p !== id)
+        : [...f.requestorPositionIds, id],
+    }));
   };
 
   const addStep = () => {
@@ -125,7 +154,8 @@ export default function ApprovalLevelsPage() {
         await api.patch(`/approval-levels/${editingId}`, {
           name: form.name,
           scopeType: form.scopeType,
-          departmentId: form.scopeType === 'DEPARTMENT' ? form.departmentId : undefined,
+          departmentIds: form.scopeType === 'DEPARTMENT' ? form.departmentIds : undefined,
+          requestorPositionIds: form.requestorPositionIds,
           minAmount: Number(form.minAmount),
           maxAmount: form.maxAmount ? Number(form.maxAmount) : undefined,
           isActive: form.isActive,
@@ -136,7 +166,8 @@ export default function ApprovalLevelsPage() {
           name: form.name,
           documentStage: form.documentStage,
           scopeType: form.scopeType,
-          departmentId: form.scopeType === 'DEPARTMENT' ? form.departmentId : undefined,
+          departmentIds: form.scopeType === 'DEPARTMENT' ? form.departmentIds : undefined,
+          requestorPositionIds: form.requestorPositionIds,
           minAmount: Number(form.minAmount),
           maxAmount: form.maxAmount ? Number(form.maxAmount) : undefined,
           steps,
@@ -152,9 +183,12 @@ export default function ApprovalLevelsPage() {
   };
 
   const scopeLabel = (l: ApprovalLevel) => {
-    if (l.scopeType === 'DEPARTMENT') return `Department: ${l.department?.name ?? '-'}`;
+    if (l.scopeType === 'DEPARTMENT') return `Department: ${l.departments.map((d) => d.department.name).join(', ') || '-'}`;
     return 'Any';
   };
+
+  const requestorLabel = (l: ApprovalLevel) =>
+    l.requestorPositions.length > 0 ? l.requestorPositions.map((p) => p.position.name).join(', ') : 'Any';
 
   return (
     <div>
@@ -173,9 +207,11 @@ export default function ApprovalLevelsPage() {
         </div>
       </div>
       <p style={{ color: 'var(--muted)', marginTop: -8 }}>
-        On submit, a Pre-Event or Expense is matched against active Levels by Document Stage, amount, and scope
-        (Department exact match wins over Any). Each step in the chain must resolve to a real user (Department -&gt;
-        that Department&apos;s Approvers, Any -&gt; any active holder) or the submit is blocked with a precise error.
+        On submit, a Pre-Event or Expense is matched against active Levels by Document Stage, amount, scope
+        (Department exact match wins over Any), and optionally the requestor&apos;s own Position (e.g. a Sales
+        requestor can get a different chain than a Head Pod requestor). Each step in the chain must resolve to a
+        real user (Department -&gt; that Department&apos;s Approvers, Any -&gt; any active holder) or the submit is
+        blocked with a precise error.
       </p>
 
       {showForm && (
@@ -210,17 +246,38 @@ export default function ApprovalLevelsPage() {
             </div>
             {form.scopeType === 'DEPARTMENT' && (
               <div className="form-row">
-                <label>Department</label>
-                <select required value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
-                  <option value="">Select Department</option>
+                <label>Departments (this Level's chain covers every one checked)</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
                   {departments.map((d) => (
-                    <option key={d.id} value={d.id}>
+                    <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'normal' }}>
+                      <input
+                        type="checkbox"
+                        style={{ width: 'auto' }}
+                        checked={form.departmentIds.includes(d.id)}
+                        onChange={() => toggleDepartment(d.id)}
+                      />
                       {d.name}
-                    </option>
+                    </label>
                   ))}
-                </select>
+                </div>
               </div>
             )}
+            <div className="form-row">
+              <label>Requestor Position (optional — blank = matches any requestor)</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+                {positions.map((p) => (
+                  <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'normal' }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={form.requestorPositionIds.includes(p.id)}
+                      onChange={() => toggleRequestorPosition(p.id)}
+                    />
+                    {p.name}
+                  </label>
+                ))}
+              </div>
+            </div>
             <div className="form-row">
               <label>Min Amount (IDR)</label>
               <NumberInput required value={form.minAmount} onChange={(v) => setForm({ ...form, minAmount: v })} />
@@ -266,7 +323,12 @@ export default function ApprovalLevelsPage() {
             </ol>
           )}
 
-          <button className="btn btn-primary" type="submit" disabled={saving || form.stepPositionIds.length === 0} style={{ marginTop: 16 }}>
+          <button
+            className="btn btn-primary"
+            type="submit"
+            disabled={saving || form.stepPositionIds.length === 0 || (form.scopeType === 'DEPARTMENT' && form.departmentIds.length === 0)}
+            style={{ marginTop: 16 }}
+          >
             {saving ? 'Saving...' : 'Save'}
           </button>
         </form>
@@ -281,6 +343,7 @@ export default function ApprovalLevelsPage() {
               <th>Name</th>
               <th>Stage</th>
               <th>Scope</th>
+              <th>Requestor</th>
               <th>Amount Range</th>
               <th>Chain</th>
               <th>Active</th>
@@ -293,6 +356,7 @@ export default function ApprovalLevelsPage() {
                 <td>{l.name}</td>
                 <td>{l.documentStage === 'PRE_EVENT' ? 'Pre-Event' : l.documentStage === 'EXPENSES' ? 'Expenses' : 'Settlement'}</td>
                 <td>{scopeLabel(l)}</td>
+                <td>{requestorLabel(l)}</td>
                 <td>
                   {formatCurrency(l.minAmount)} – {formatCurrency(l.maxAmount)}
                 </td>
@@ -307,7 +371,7 @@ export default function ApprovalLevelsPage() {
             ))}
             {filteredLevels.length === 0 && (
               <tr>
-                <td colSpan={7} style={{ color: 'var(--muted)' }}>No Approval Levels configured — submits will be blocked until one exists</td>
+                <td colSpan={8} style={{ color: 'var(--muted)' }}>No Approval Levels configured — submits will be blocked until one exists</td>
               </tr>
             )}
           </tbody>

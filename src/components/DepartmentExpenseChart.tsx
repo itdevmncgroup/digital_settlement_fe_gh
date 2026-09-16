@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 interface DepartmentChartRow {
   id: string;
   name: string;
+  /** Optional small muted line under the name, e.g. top submitters for a POD. */
+  subtitle?: string;
   totalExpense: number;
   transactionCount: number;
 }
@@ -55,10 +57,13 @@ export default function DepartmentExpenseChart({ data }: { data: DepartmentChart
             onMouseLeave={() => setHoverId(null)}
             style={{ cursor: 'default' }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: color, boxShadow: `0 0 8px ${color}` }} />
-                {row.name}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: row.subtitle ? 'flex-start' : 'baseline', marginBottom: 5 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: color, boxShadow: `0 0 8px ${color}` }} />
+                  {row.name}
+                </span>
+                {row.subtitle && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--muted)', paddingLeft: 15 }}>{row.subtitle}</span>}
               </span>
               <span style={{ fontSize: 12.5, color: 'var(--muted)', fontWeight: 600 }}>
                 {formatCompactCurrency(value)} <span style={{ opacity: 0.7 }}>· {pct.toFixed(1)}%</span>

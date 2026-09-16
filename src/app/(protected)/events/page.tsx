@@ -126,9 +126,9 @@ export default function EventsPage() {
 
   useEffect(() => {
     if (!canCreate) return;
-    api.get<Option[]>('/advertisers').then(setAdvertisers).catch(() => undefined);
-    api.get<Option[]>('/brands').then(setBrands).catch(() => undefined);
-    api.get<Option[]>('/activity-types').then(setActivityTypes).catch(() => undefined);
+    api.get<Option[]>('/advertisers?active=true').then(setAdvertisers).catch(() => undefined);
+    api.get<Option[]>('/brands?active=true').then(setBrands).catch(() => undefined);
+    api.get<Option[]>('/activity-types?active=true').then(setActivityTypes).catch(() => undefined);
     if (canActOnBehalf) {
       api
         .get<SalesOption[]>('/users')
@@ -144,7 +144,7 @@ export default function EventsPage() {
       setDepartmentOptions([]);
       return;
     }
-    const path = canActOnBehalf ? `/departments?salesId=${targetSalesId}` : '/departments/me';
+    const path = canActOnBehalf ? `/departments?salesId=${targetSalesId}&active=true` : '/departments/me';
     api.get<Option[]>(path).then(setDepartmentOptions).catch(() => undefined);
   }, [canActOnBehalf, onBehalfOfSalesId, user?.id]);
 

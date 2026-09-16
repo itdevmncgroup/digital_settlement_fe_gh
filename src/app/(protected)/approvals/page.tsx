@@ -86,7 +86,7 @@ export default function ApprovalsPage() {
   useEffect(load, [departmentFilter, fromDate, toDate]);
 
   useEffect(() => {
-    const path = canActOnBehalf ? '/departments' : '/departments/me';
+    const path = canActOnBehalf ? '/departments?active=true' : '/departments/me';
     api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canActOnBehalf]);

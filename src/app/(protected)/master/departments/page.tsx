@@ -15,7 +15,7 @@ interface Option {
 interface SalesOption extends Option {
   employeeId: string;
   roles: string[];
-  departmentId?: string | null;
+  departments: Option[];
 }
 
 interface AdvertiserOption extends Option {
@@ -28,12 +28,19 @@ interface DepartmentAssignment {
   brand: Option & { advertiser: Option };
 }
 
+interface DepartmentApprover {
+  id: string;
+  position: Option;
+  user: Option & { employeeId: string };
+}
+
 interface DepartmentListItem {
   id: string;
   name: string;
   code: string | null;
   isActive: boolean;
   assignments: DepartmentAssignment[];
+  approvers: DepartmentApprover[];
 }
 
 interface StagedPair {
@@ -41,6 +48,13 @@ interface StagedPair {
   agencyName: string;
   brandId: string;
   brandName: string;
+}
+
+interface StagedApprover {
+  positionId: string;
+  positionName: string;
+  userId: string;
+  userName: string;
 }
 
 const nameCollator = new Intl.Collator('id', { numeric: true, sensitivity: 'base' });
@@ -78,8 +92,8 @@ function TruncatedList({ items }: { items: string[] }) {
 // Department: an org department AND/OR a named Sales coverage group (BRD
 // section 6.2, formerly the separate "POD" concept - "POD 1".."POD 10" are
 // Department rows just like any org department). Coverage is one or more
-// Agency -> Brand pairs; membership (which Sales belong here) is simply each
-// User's own Department field, managed on the User master page, not here.
+// Agency -> Brand pairs; membership (which Sales belong here, many-to-many)
+// is managed on the User master page, not here.
 export default function DepartmentsPage() {
   const [departments, setDepartments] = useState<DepartmentListItem[]>([]);
   const [salesOptions, setSalesOptions] = useState<SalesOption[]>([]);
@@ -101,6 +115,13 @@ export default function DepartmentsPage() {
   const [pickerBrandIds, setPickerBrandIds] = useState<string[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
   const [stagedPairs, setStagedPairs] = useState<StagedPair[]>([]);
+
+  // Approvers staging area (create form): Position -> User, sent as
+  // /departments/:id/approvers calls right after the Department itself is created.
+  const [positions, setPositions] = useState<Option[]>([]);
+  const [approverPositionId, setApproverPositionId] = useState('');
+  const [approverUserId, setApproverUserId] = useState('');
+  const [stagedApprovers, setStagedApprovers] = useState<StagedApprover[]>([]);
 
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('');
   const [busy, setBusy] = useState(false);
@@ -130,8 +151,9 @@ export default function DepartmentsPage() {
 
   useEffect(() => {
     api.get<SalesOption[]>('/users').then(setSalesOptions).catch(() => undefined);
-    api.get<Option[]>('/agencies').then(setAgencies).catch(() => undefined);
-    api.get<AdvertiserOption[]>('/advertisers').then(setAdvertisers).catch(() => undefined);
+    api.get<Option[]>('/agencies?active=true').then(setAgencies).catch(() => undefined);
+    api.get<AdvertiserOption[]>('/advertisers?active=true').then(setAdvertisers).catch(() => undefined);
+    api.get<Option[]>('/positions?active=true').then(setPositions).catch(() => undefined);
   }, []);
 
   // Fetch Brands scoped to the selected Advertisers whenever that set changes.
@@ -142,7 +164,7 @@ export default function DepartmentsPage() {
     }
     setPickerLoading(true);
     api
-      .get<Option[]>(`/brands?advertiserIds=${pickerAdvertiserIds.join(',')}`)
+      .get<Option[]>(`/brands?advertiserIds=${pickerAdvertiserIds.join(',')}&active=true`)
       .then(setPickerBrands)
       .catch(() => setPickerBrands([]))
       .finally(() => setPickerLoading(false));
@@ -156,6 +178,9 @@ export default function DepartmentsPage() {
     setPickerBrandIds([]);
     setPickerBrands([]);
     setStagedPairs([]);
+    setApproverPositionId('');
+    setApproverUserId('');
+    setStagedApprovers([]);
   };
 
   const advertisersForPickerAgency = advertisers.filter((a) => a.agencyId === pickerAgencyId);
@@ -191,17 +216,39 @@ export default function DepartmentsPage() {
 
   const removeStagedPair = (brandId: string) => setStagedPairs((prev) => prev.filter((p) => p.brandId !== brandId));
 
+  // A Position can only be staged once here (the backend upserts one User per
+  // Position per Department anyway - @@unique([departmentId, positionId])).
+  const addStagedApprover = () => {
+    const position = positions.find((p) => p.id === approverPositionId);
+    const user = salesOptions.find((s) => s.id === approverUserId);
+    if (!position || !user) return;
+    setStagedApprovers((prev) => [
+      ...prev.filter((a) => a.positionId !== position.id),
+      { positionId: position.id, positionName: position.name, userId: user.id, userName: user.name },
+    ]);
+    setApproverPositionId('');
+    setApproverUserId('');
+  };
+
+  const removeStagedApprover = (positionId: string) =>
+    setStagedApprovers((prev) => prev.filter((a) => a.positionId !== positionId));
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setError('');
     try {
       const assignments = stagedPairs.map(({ agencyId, brandId }) => ({ agencyId, brandId }));
-      await api.post('/departments', {
+      const department = await api.post<DepartmentListItem>('/departments', {
         name,
         code: code || undefined,
         assignments: assignments.length > 0 ? assignments : undefined,
       });
+      // CreateDepartmentDto has no approvers field - the Department must exist
+      // first, so staged approvers go in one by one right after.
+      for (const a of stagedApprovers) {
+        await api.post(`/departments/${department.id}/approvers`, { positionId: a.positionId, userId: a.userId });
+      }
       resetForm();
       setShowForm(false);
       load();
@@ -214,7 +261,7 @@ export default function DepartmentsPage() {
 
   const selectedDepartment = departments.find((d) => d.id === selectedDepartmentId) ?? null;
   const selectedDepartmentUsedBrandIds = new Set(selectedDepartment?.assignments.map((a) => a.brand.id));
-  const selectedDepartmentMembers = salesOptions.filter((s) => s.departmentId === selectedDepartmentId);
+  const selectedDepartmentMembers = salesOptions.filter((s) => s.departments.some((d) => d.id === selectedDepartmentId));
 
   const [editName, setEditName] = useState('');
   const [editCode, setEditCode] = useState('');
@@ -261,7 +308,7 @@ export default function DepartmentsPage() {
       return;
     }
     api
-      .get<Option[]>(`/brands?advertiserIds=${manageAdvertiserIds.join(',')}`)
+      .get<Option[]>(`/brands?advertiserIds=${manageAdvertiserIds.join(',')}&active=true`)
       .then((all) => setManageBrands(all.filter((b) => !selectedDepartmentUsedBrandIds.has(b.id))))
       .catch(() => setManageBrands([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -288,6 +335,48 @@ export default function DepartmentsPage() {
     setError('');
     try {
       await api.del(`/departments/${selectedDepartmentId}/assignments/${assignmentId}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Remove failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const [manageApproverPositionId, setManageApproverPositionId] = useState('');
+  const [manageApproverUserId, setManageApproverUserId] = useState('');
+  useEffect(() => {
+    setManageApproverPositionId('');
+    setManageApproverUserId('');
+  }, [selectedDepartmentId]);
+
+  // Upserts (backend replaces the User already holding this Position for this
+  // Department, since positionId is unique per Department).
+  const addApproverToSelectedDepartment = async () => {
+    if (!selectedDepartmentId || !manageApproverPositionId || !manageApproverUserId) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.post(`/departments/${selectedDepartmentId}/approvers`, {
+        positionId: manageApproverPositionId,
+        userId: manageApproverUserId,
+      });
+      setManageApproverPositionId('');
+      setManageApproverUserId('');
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Add failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeApprover = async (approverId: string) => {
+    if (!selectedDepartmentId) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.del(`/departments/${selectedDepartmentId}/approvers/${approverId}`);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Remove failed');
@@ -411,6 +500,62 @@ export default function DepartmentsPage() {
               </table>
             </div>
           )}
+
+          <div style={{ marginTop: 20 }}>
+            <label>Approvers: Position → Sales (optional)</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
+              <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
+                <label>Position</label>
+                <select value={approverPositionId} onChange={(e) => setApproverPositionId(e.target.value)}>
+                  <option value="">Select position</option>
+                  {positions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
+                <label>Sales (User)</label>
+                <select value={approverUserId} onChange={(e) => setApproverUserId(e.target.value)}>
+                  <option value="">Select user</option>
+                  {salesOptions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.employeeId})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button type="button" className="btn btn-primary" disabled={!approverPositionId || !approverUserId} onClick={addStagedApprover}>
+                + Add Approver
+              </button>
+            </div>
+
+            {stagedApprovers.length > 0 && (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Position</th>
+                    <th>Sales</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stagedApprovers.map((a) => (
+                    <tr key={a.positionId}>
+                      <td>{a.positionName}</td>
+                      <td>{a.userName}</td>
+                      <td>
+                        <button type="button" className="btn btn-danger" onClick={() => removeStagedApprover(a.positionId)}>
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
 
           <button className="btn btn-primary" type="submit" disabled={saving || !name} style={{ marginTop: 16 }}>
             {saving ? 'Saving...' : 'Save Department'}
@@ -602,6 +747,77 @@ export default function DepartmentsPage() {
                 {selectedDepartment.assignments.length === 0 && (
                   <tr>
                     <td colSpan={3} style={{ color: 'var(--muted)' }}>No pairs yet</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ marginTop: 24 }}>
+            <h3>Approvers</h3>
+            <p style={{ color: 'var(--muted)', marginTop: -8 }}>
+              Who holds each Position (e.g. &quot;Head&quot;) for this specific Department - feeds the Approval
+              Level engine. One User per Position per Department; adding again for the same Position replaces
+              the current holder.
+            </p>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', margin: '12px 0', flexWrap: 'wrap' }}>
+              <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
+                <label>Position</label>
+                <select value={manageApproverPositionId} onChange={(e) => setManageApproverPositionId(e.target.value)}>
+                  <option value="">Select position</option>
+                  {positions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
+                <label>Sales (User)</label>
+                <select value={manageApproverUserId} onChange={(e) => setManageApproverUserId(e.target.value)}>
+                  <option value="">Select user</option>
+                  {salesOptions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.employeeId})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                className="btn btn-primary"
+                disabled={!manageApproverPositionId || !manageApproverUserId || busy}
+                onClick={addApproverToSelectedDepartment}
+              >
+                Add
+              </button>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Position</th>
+                  <th>Sales</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedDepartment.approvers.map((a) => (
+                  <tr key={a.id}>
+                    <td>{a.position.name}</td>
+                    <td>
+                      {a.user.name} ({a.user.employeeId})
+                    </td>
+                    <td>
+                      <button className="btn btn-danger" disabled={busy} onClick={() => removeApprover(a.id)}>
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {selectedDepartment.approvers.length === 0 && (
+                  <tr>
+                    <td colSpan={3} style={{ color: 'var(--muted)' }}>No approvers yet</td>
                   </tr>
                 )}
               </tbody>

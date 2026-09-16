@@ -14,7 +14,7 @@ export default function RootPage() {
       router.replace('/login');
       return;
     }
-    router.replace(hasRole('ADMIN', 'FINANCE', 'MANAGEMENT') ? '/dashboard' : '/expenses');
+    router.replace(hasRole('ADMIN', 'FINANCE', 'MANAGEMENT') ? '/expense-dashboard' : '/expenses');
   }, [loading, user, hasRole, router]);
 
   return null;

@@ -23,12 +23,13 @@ interface UserRow {
   roles: string[];
   unit?: { id: string; name: string } | null;
   position?: { id: string; name: string } | null;
-  department?: { id: string; name: string } | null;
+  departments: { id: string; name: string }[];
 }
 
 interface Unit {
   id: string;
   name: string;
+  isActive: boolean;
 }
 
 export default function UsersPage() {
@@ -47,7 +48,7 @@ export default function UsersPage() {
   const filteredUsers = users.filter((u) => {
     if (!search) return true;
     const q = search.toLowerCase();
-    return [u.employeeId, u.name, u.email, u.unit?.name, u.position?.name, u.department?.name, ...u.roles].some((v) =>
+    return [u.employeeId, u.name, u.email, u.unit?.name, u.position?.name, ...u.departments.map((d) => d.name), ...u.roles].some((v) =>
       v?.toLowerCase().includes(q),
     );
   });
@@ -60,7 +61,7 @@ export default function UsersPage() {
     password: '',
     unitId: '',
     positionId: '',
-    departmentId: '',
+    departmentIds: [] as string[],
     status: 'ACTIVE',
     roles: [] as string[],
   });
@@ -82,10 +83,19 @@ export default function UsersPage() {
     }));
   };
 
+  const toggleDepartment = (departmentId: string) => {
+    setForm((f) => ({
+      ...f,
+      departmentIds: f.departmentIds.includes(departmentId)
+        ? f.departmentIds.filter((id) => id !== departmentId)
+        : [...f.departmentIds, departmentId],
+    }));
+  };
+
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
-    setForm({ employeeId: '', name: '', email: '', password: '', unitId: '', positionId: '', departmentId: '', status: 'ACTIVE', roles: [] });
+    setForm({ employeeId: '', name: '', email: '', password: '', unitId: '', positionId: '', departmentIds: [], status: 'ACTIVE', roles: [] });
   };
 
   const startEdit = (u: UserRow) => {
@@ -97,7 +107,7 @@ export default function UsersPage() {
       password: '',
       unitId: u.unit?.id ?? '',
       positionId: u.position?.id ?? '',
-      departmentId: u.department?.id ?? '',
+      departmentIds: u.departments.map((d) => d.id),
       status: u.status,
       roles: u.roles,
     });
@@ -114,7 +124,7 @@ export default function UsersPage() {
           name: form.name,
           unitId: form.unitId || undefined,
           positionId: form.positionId || undefined,
-          departmentId: form.departmentId || undefined,
+          departmentIds: form.departmentIds,
           status: form.status,
         });
         await api.patch(`/users/${editingId}/roles`, { roles: form.roles });
@@ -122,7 +132,7 @@ export default function UsersPage() {
         // CreateUserDto has no `status` field (new users are always ACTIVE) - the
         // backend's ValidationPipe rejects unknown properties, so it must be stripped.
         const { status: _status, ...createPayload } = form;
-        await api.post('/users', { ...createPayload, positionId: form.positionId || undefined, departmentId: form.departmentId || undefined });
+        await api.post('/users', { ...createPayload, positionId: form.positionId || undefined });
       }
       closeForm();
       load();
@@ -176,33 +186,26 @@ export default function UsersPage() {
               <label>Unit</label>
               <select value={form.unitId} onChange={(e) => setForm({ ...form, unitId: e.target.value })}>
                 <option value="">-</option>
-                {units.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name}
-                  </option>
-                ))}
+                {units
+                  .filter((u) => u.isActive || form.unitId === u.id)
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name}
+                    </option>
+                  ))}
               </select>
             </div>
             <div className="form-row">
               <label>Position</label>
               <select value={form.positionId} onChange={(e) => setForm({ ...form, positionId: e.target.value })}>
                 <option value="">-</option>
-                {positions.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="form-row">
-              <label>Department</label>
-              <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
-                <option value="">-</option>
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
+                {positions
+                  .filter((p) => p.isActive || form.positionId === p.id)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
               </select>
             </div>
             {editingId && (
@@ -217,6 +220,18 @@ export default function UsersPage() {
                 </select>
               </div>
             )}
+          </div>
+
+          <label>Departments</label>
+          <div style={{ maxHeight: 140, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8, marginBottom: 16 }}>
+            {departments
+              .filter((d) => d.isActive || form.departmentIds.includes(d.id))
+              .map((d) => (
+                <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0', fontWeight: 'normal' }}>
+                  <input type="checkbox" style={{ width: 'auto' }} checked={form.departmentIds.includes(d.id)} onChange={() => toggleDepartment(d.id)} />
+                  {d.name}
+                </label>
+              ))}
           </div>
 
           <label>Roles</label>
@@ -262,7 +277,7 @@ export default function UsersPage() {
                 <td>{u.email}</td>
                 <td>{u.unit?.name || '-'}</td>
                 <td>{u.position?.name || '-'}</td>
-                <td>{u.department?.name || '-'}</td>
+                <td>{u.departments.map((d) => d.name).join(', ') || '-'}</td>
                 <td>{u.roles.join(', ')}</td>
                 <td>{u.status}</td>
                 <td>

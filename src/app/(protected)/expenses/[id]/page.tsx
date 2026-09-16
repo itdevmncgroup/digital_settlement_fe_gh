@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { api, ApiError, uploadFile } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDate, formatDateTime } from '@/lib/date';
@@ -80,16 +80,11 @@ const PARTICIPANT_SECTIONS: { category: ParticipantCategory; label: string }[] =
 
 const emptyParticipant = (category: ParticipantCategory): ParticipantEditRow => ({ category, name: '', position: '', company: '' });
 
-const PAYMENT_METHOD_OPTIONS: { value: string; label: string }[] = [
-  { value: 'CREDIT_CARD', label: 'Credit Card' },
-  { value: 'GOPAY', label: 'GoPay' },
-  { value: 'SHOPEEPAY', label: 'ShopeePay' },
-  { value: 'DANA', label: 'Dana' },
-  { value: 'OVO', label: 'OVO' },
-  { value: 'BANK_TRANSFER', label: 'Bank Transfer' },
-  { value: 'CASH', label: 'Cash' },
-  { value: 'OTHER', label: 'Others' },
-];
+interface PaymentMethodOption {
+  id: string;
+  code: string;
+  name: string;
+}
 
 interface PhotoRow {
   id: string;
@@ -113,7 +108,8 @@ interface Expense {
   activityType: { name: string };
   creditCard: { bank: string; last4: string; cardHolderName: string } | null;
   creditCardId: string | null;
-  paymentMethodType: string | null;
+  paymentMethodId: string | null;
+  paymentMethod: { id: string; code: string; name: string } | null;
   paymentMethodNote: string | null;
   merchantName: string | null;
   location: string | null;
@@ -141,17 +137,6 @@ interface TransactionSearchResult {
 }
 
 const MATCHED_TXN_STATUSES = ['AUTO_MATCHED', 'MANUAL_MATCHED'];
-
-const PAYMENT_METHOD_LABELS: Record<string, string> = {
-  CREDIT_CARD: 'Credit Card',
-  GOPAY: 'GoPay',
-  SHOPEEPAY: 'ShopeePay',
-  DANA: 'Dana',
-  OVO: 'OVO',
-  BANK_TRANSFER: 'Bank Transfer',
-  CASH: 'Cash',
-  OTHER: 'Others',
-};
 
 interface ApprovalAction {
   id: string;
@@ -200,6 +185,7 @@ function formatCurrency(value: string | number | null) {
 
 export default function ExpenseDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { user, hasRole, hasPermission } = useAuth();
 
   const [expense, setExpense] = useState<Expense | null>(null);
@@ -219,7 +205,7 @@ export default function ExpenseDetailPage() {
     expenseDate: '',
     merchantName: '',
     location: '',
-    paymentMethodType: '',
+    paymentMethodId: '',
     paymentMethodNote: '',
     creditCardId: '',
   });
@@ -230,6 +216,7 @@ export default function ExpenseDetailPage() {
   const [advertiserOptions, setAdvertiserOptions] = useState<Option[]>([]);
   const [brandOptions, setBrandOptions] = useState<Option[]>([]);
   const [creditCardOptions, setCreditCardOptions] = useState<CreditCardOption[]>([]);
+  const [paymentMethodOptions, setPaymentMethodOptions] = useState<PaymentMethodOption[]>([]);
   const [editExtraAgencies, setEditExtraAgencies] = useState<Option[]>([]);
   const [editExtraAdvertisers, setEditExtraAdvertisers] = useState<Option[]>([]);
   const [editExtraBrands, setEditExtraBrands] = useState<Option[]>([]);
@@ -258,10 +245,11 @@ export default function ExpenseDetailPage() {
   useEffect(load, [id]);
 
   useEffect(() => {
-    api.get<Option[]>('/cost-centers').then(setCostCenters).catch(() => undefined);
-    api.get<Option[]>('/expense-categories').then(setCategories).catch(() => undefined);
-    api.get<Option[]>('/advertisers').then(setAdvertiserOptions).catch(() => undefined);
-    api.get<Option[]>('/agencies').then(setAgencyOptions).catch(() => undefined);
+    api.get<Option[]>('/cost-centers?active=true').then(setCostCenters).catch(() => undefined);
+    api.get<Option[]>('/expense-categories?active=true').then(setCategories).catch(() => undefined);
+    api.get<Option[]>('/advertisers?active=true').then(setAdvertiserOptions).catch(() => undefined);
+    api.get<Option[]>('/agencies?active=true').then(setAgencyOptions).catch(() => undefined);
+    api.get<PaymentMethodOption[]>('/payment-methods?active=true').then(setPaymentMethodOptions).catch(() => undefined);
   }, []);
 
   // Brand options narrow to the expense's own (locked) primary Advertiser plus
@@ -275,19 +263,19 @@ export default function ExpenseDetailPage() {
     }
     const ids = [expense.advertiser.id, ...editExtraAdvertisers.map((a) => a.id)].join(',');
     api
-      .get<Option[]>(`/brands?advertiserIds=${ids}`)
+      .get<Option[]>(`/brands?advertiserIds=${ids}&active=true`)
       .then(setBrandOptions)
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expense?.advertiser.id, extraAdvertiserIds]);
 
-  // 1 Department = 1 credit card - scope the Credit Card dropdown to this expense's own Department.
+  // 1 Department = 1 credit card - scope the Corporate Card dropdown to this expense's own Department.
   useEffect(() => {
     if (!expense?.department?.id) {
       setCreditCardOptions([]);
       return;
     }
-    api.get<CreditCardOption[]>(`/credit-cards?departmentId=${expense.department.id}`).then(setCreditCardOptions).catch(() => undefined);
+    api.get<CreditCardOption[]>(`/credit-cards?departmentId=${expense.department.id}&active=true`).then(setCreditCardOptions).catch(() => undefined);
   }, [expense?.department?.id]);
 
   const isOwner = expense?.salesId === user?.id;
@@ -319,7 +307,7 @@ export default function ExpenseDetailPage() {
       expenseDate: expense.expenseDate.slice(0, 10),
       merchantName: expense.merchantName ?? '',
       location: expense.location ?? '',
-      paymentMethodType: expense.paymentMethodType ?? '',
+      paymentMethodId: expense.paymentMethodId ?? '',
       paymentMethodNote: expense.paymentMethodNote ?? '',
       creditCardId: expense.creditCardId ?? '',
     });
@@ -372,6 +360,7 @@ export default function ExpenseDetailPage() {
         .filter((it) => it.description.trim() && it.amount)
         .map((it) => ({ description: it.description, amount: Number(it.amount), categoryId: it.categoryId || undefined }));
 
+      const editSelectedPaymentMethod = paymentMethodOptions.find((m) => m.id === editForm.paymentMethodId);
       const payload: Record<string, unknown> = {
         purpose: editForm.purpose,
         amount: Number(editForm.amount),
@@ -379,9 +368,9 @@ export default function ExpenseDetailPage() {
         costCenterId: editForm.costCenterId || undefined,
         merchantName: editForm.merchantName || undefined,
         location: editForm.location || undefined,
-        paymentMethodType: editForm.paymentMethodType || undefined,
+        paymentMethodId: editForm.paymentMethodId || undefined,
         paymentMethodNote: editForm.paymentMethodNote || undefined,
-        creditCardId: editForm.paymentMethodType === 'CREDIT_CARD' ? editForm.creditCardId || undefined : undefined,
+        creditCardId: editSelectedPaymentMethod?.code === 'CORPORATE_CARD' ? editForm.creditCardId || undefined : undefined,
       };
       if (validItems.length > 0) payload.items = validItems;
       if (editExtraAgencies.length > 0) payload.extraAgencyIds = editExtraAgencies.map((a) => a.id);
@@ -560,10 +549,22 @@ export default function ExpenseDetailPage() {
   if (error && !expense) return <div className="error-text">{error}</div>;
   if (!expense) return <div>Loading...</div>;
 
+  const editSelectedPaymentMethodCode = paymentMethodOptions.find((m) => m.id === editForm.paymentMethodId)?.code;
+
   return (
     <div>
       <div className="toolbar">
-        <h1>{expense.expenseNo}</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => router.back()}
+            title="Back to list"
+          >
+            ← Back
+          </button>
+          <h1 style={{ margin: 0 }}>{expense.expenseNo}</h1>
+        </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span className="badge badge-info">{expense.status}</span>
           <span className={`badge ${expense.isMatched ? 'badge-success' : 'badge-info'}`}>{expense.isMatched ? 'Matched' : 'Not Matched'}</span>
@@ -652,20 +653,20 @@ export default function ExpenseDetailPage() {
             <div className="form-row">
               <label>Payment Method</label>
               <select
-                value={editForm.paymentMethodType}
-                onChange={(e) => setEditForm({ ...editForm, paymentMethodType: e.target.value, creditCardId: '', paymentMethodNote: '' })}
+                value={editForm.paymentMethodId}
+                onChange={(e) => setEditForm({ ...editForm, paymentMethodId: e.target.value, creditCardId: '', paymentMethodNote: '' })}
               >
                 <option value="">- (optional)</option>
-                {PAYMENT_METHOD_OPTIONS.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
+                {paymentMethodOptions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
                   </option>
                 ))}
               </select>
             </div>
-            {editForm.paymentMethodType === 'CREDIT_CARD' && (
+            {editSelectedPaymentMethodCode === 'CORPORATE_CARD' && (
               <div className="form-row">
-                <label>Credit Card</label>
+                <label>Corporate Card</label>
                 <select
                   required
                   disabled={!expense.department}
@@ -681,16 +682,10 @@ export default function ExpenseDetailPage() {
                 </select>
               </div>
             )}
-            {['GOPAY', 'SHOPEEPAY', 'DANA', 'OVO'].includes(editForm.paymentMethodType) && (
+            {editSelectedPaymentMethodCode && editSelectedPaymentMethodCode !== 'CORPORATE_CARD' && (
               <div className="form-row">
-                <label style={{ fontSize: 12 }}>Account / Phone Number (optional)</label>
+                <label style={{ fontSize: 12 }}>Note (optional)</label>
                 <input value={editForm.paymentMethodNote} onChange={(e) => setEditForm({ ...editForm, paymentMethodNote: e.target.value })} />
-              </div>
-            )}
-            {editForm.paymentMethodType === 'OTHER' && (
-              <div className="form-row">
-                <label style={{ fontSize: 12 }}>Please specify</label>
-                <input required value={editForm.paymentMethodNote} onChange={(e) => setEditForm({ ...editForm, paymentMethodNote: e.target.value })} />
               </div>
             )}
           </div>
@@ -927,7 +922,7 @@ export default function ExpenseDetailPage() {
             <div>
               <div className="label" style={{ color: 'var(--muted)', fontSize: 12 }}>Payment Method</div>
               <div>
-                {expense.paymentMethodType ? PAYMENT_METHOD_LABELS[expense.paymentMethodType] ?? expense.paymentMethodType : '-'}
+                {expense.paymentMethod?.name ?? '-'}
                 {expense.creditCard ? ` (${expense.creditCard.bank} •••• ${expense.creditCard.last4})` : ''}
                 {expense.paymentMethodNote ? ` — ${expense.paymentMethodNote}` : ''}
               </div>
