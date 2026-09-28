@@ -6,6 +6,7 @@ import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
 import Modal from '@/components/Modal';
+import { useConfirm } from '@/components/ConfirmDialog';
 
 interface Option {
   id: string;
@@ -95,6 +96,7 @@ function TruncatedList({ items }: { items: string[] }) {
 // Agency -> Brand pairs; membership (which Sales belong here, many-to-many)
 // is managed on the User master page, not here.
 export default function DepartmentsPage() {
+  const confirm = useConfirm();
   const [departments, setDepartments] = useState<DepartmentListItem[]>([]);
   const [salesOptions, setSalesOptions] = useState<SalesOption[]>([]);
   const [agencies, setAgencies] = useState<Option[]>([]);
@@ -329,12 +331,19 @@ export default function DepartmentsPage() {
     }
   };
 
-  const removeAssignment = async (assignmentId: string) => {
+  const removeAssignment = async (a: DepartmentAssignment) => {
     if (!selectedDepartmentId) return;
+    const ok = await confirm({
+      title: 'Remove assignment?',
+      message: `This unassigns ${a.agency.name} / ${a.brand.name} from the department.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     setError('');
     try {
-      await api.del(`/departments/${selectedDepartmentId}/assignments/${assignmentId}`);
+      await api.del(`/departments/${selectedDepartmentId}/assignments/${a.id}`);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Remove failed');
@@ -371,12 +380,19 @@ export default function DepartmentsPage() {
     }
   };
 
-  const removeApprover = async (approverId: string) => {
+  const removeApprover = async (a: DepartmentApprover) => {
     if (!selectedDepartmentId) return;
+    const ok = await confirm({
+      title: 'Remove approver?',
+      message: `This removes ${a.user.name} as the ${a.position.name} approver for this department.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     setError('');
     try {
-      await api.del(`/departments/${selectedDepartmentId}/approvers/${approverId}`);
+      await api.del(`/departments/${selectedDepartmentId}/approvers/${a.id}`);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Remove failed');
@@ -738,7 +754,7 @@ export default function DepartmentsPage() {
                     <td>{a.agency.name}</td>
                     <td>{a.brand.name}</td>
                     <td>
-                      <button className="btn btn-danger" disabled={busy} onClick={() => removeAssignment(a.id)}>
+                      <button className="btn btn-danger" disabled={busy} onClick={() => removeAssignment(a)}>
                         Remove
                       </button>
                     </td>
@@ -809,7 +825,7 @@ export default function DepartmentsPage() {
                       {a.user.name} ({a.user.employeeId})
                     </td>
                     <td>
-                      <button className="btn btn-danger" disabled={busy} onClick={() => removeApprover(a.id)}>
+                      <button className="btn btn-danger" disabled={busy} onClick={() => removeApprover(a)}>
                         Remove
                       </button>
                     </td>

@@ -10,10 +10,12 @@ export default function UnitsPage() {
       fields={[
         { key: 'code', label: 'Code', type: 'text', required: true },
         { key: 'name', label: 'Name', type: 'text', required: true },
+        { key: 'revenueSharePercent', label: 'Default Settlement %', type: 'text' },
       ]}
       columns={[
         { key: 'code', label: 'Code' },
         { key: 'name', label: 'Name' },
+        { key: 'revenueSharePercent', label: 'Default Settlement %' },
         { key: 'isActive', label: 'Active' },
       ]}
     />

@@ -5,12 +5,13 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { formatDate } from '@/lib/date';
+import { formatDate, formatDateTime } from '@/lib/date';
 import Modal from '@/components/Modal';
-import DatePicker from '@/components/DatePicker';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
+import { usePrompt } from '@/components/PromptDialog';
+import SplashLoader from '@/components/SplashLoader';
 
 interface ApprovalStepInfo {
   stepOrder: number;
@@ -19,10 +20,20 @@ interface ApprovalStepInfo {
   resolvedApprover: { id: string; name: string };
 }
 
+interface ApprovalActionInfo {
+  id: string;
+  action: string;
+  reason: string | null;
+  actedAt: string;
+  actor: { id: string; name: string };
+  position: { name: string };
+}
+
 interface ApprovalRequestInfo {
   status: string;
   currentStep: number;
   steps: ApprovalStepInfo[];
+  actions?: ApprovalActionInfo[];
 }
 
 interface SettlementExpenseRow {
@@ -39,11 +50,16 @@ interface SettlementRow {
   id: string;
   settlementNo: string;
   totalAmount: string;
-  status: 'DRAFT' | 'COMPLETE';
+  // DRAFT (unused in practice) | DRAFT_SETTLEMENT | APPROVAL_SLS_MAR_DIR |
+  // APPROVAL_VP_ACC_BIL_TAX_3TV | APPROVAL_CO_CFO_3TV | COMPLETE | REJECTED.
+  status: string;
   createdAt: string;
   department: { id: string; name: string };
   createdBy: { name: string };
   expenses: SettlementExpenseRow[];
+  // The batch's own tier (SLS_MAR_DIR -> VP -> CO_CFO) - separate from each
+  // member Expense's own approvalRequest above.
+  approvalRequest: ApprovalRequestInfo | null;
 }
 
 interface DepartmentOption {
@@ -61,25 +77,13 @@ interface GeneratedExpenseRow {
   sales: { name: string };
 }
 
-interface PreviewResult {
-  expenses: GeneratedExpenseRow[];
-  existingDraftSettlement: { id: string; settlementNo: string } | null;
-}
-
 function formatCurrency(value: string | number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(value));
 }
 
-const defaultFromDate = () => {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 1);
-  return d.toISOString().slice(0, 10);
-};
-const defaultToDate = () => new Date().toISOString().slice(0, 10);
-
 export default function SettlementPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<SplashLoader message="Loading" />}>
       <SettlementPageInner />
     </Suspense>
   );
@@ -88,9 +92,10 @@ export default function SettlementPage() {
 function SettlementPageInner() {
   const searchParams = useSearchParams();
   const { user, hasRole, hasPermission } = useAuth();
-  const canManage = hasRole('ADMIN', 'FINANCE');
+  const canManage = hasRole('ADMINISTRATOR');
   const canGenerate = hasRole('SALES') || canManage || hasPermission('settlement.create.owndept');
   const canViewBankMatching = canManage || hasPermission('expense.automatch');
+  const prompt = usePrompt();
 
   const [rows, setRows] = useState<SettlementRow[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
@@ -108,16 +113,7 @@ function SettlementPageInner() {
   });
   const pagination = usePagination(filteredRows);
 
-  const [showGenerateModal, setShowGenerateModal] = useState(false);
-  const [genDepartmentId, setGenDepartmentId] = useState('');
-  const [genFromDate, setGenFromDate] = useState(defaultFromDate);
-  const [genToDate, setGenToDate] = useState(defaultToDate);
-  const [searching, setSearching] = useState(false);
-  const [generateError, setGenerateError] = useState('');
-  const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
-  const [selectedExpenseIds, setSelectedExpenseIds] = useState<Set<string>>(new Set());
-  const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false);
-  const [creatingSettlement, setCreatingSettlement] = useState(false);
+  const [submittingDraftId, setSubmittingDraftId] = useState('');
 
   const [addModalSettlement, setAddModalSettlement] = useState<SettlementRow | null>(null);
   const [eligibleExpenses, setEligibleExpenses] = useState<GeneratedExpenseRow[]>([]);
@@ -166,97 +162,18 @@ function SettlementPageInner() {
     }
   };
 
-  const openGenerateModal = () => {
-    setGenDepartmentId('');
-    setGenFromDate(defaultFromDate());
-    setGenToDate(defaultToDate());
-    setGenerateError('');
-    setPreviewResult(null);
-    setSelectedExpenseIds(new Set());
-    setShowDuplicateConfirm(false);
-    setShowGenerateModal(true);
-  };
-
-  // Search step: scopes the search to one Department + one date range
-  // (instead of grabbing every eligible Department at once) and lists the
-  // matching, already bank-matched Expenses for review/checklisting - nothing
-  // is pre-checked, the user picks which ones to include. Nothing is created
-  // yet - the backend bundles in whether a DRAFT settlement already covers
-  // this exact Department/date range too, which the Generate Settlement step
-  // below uses to decide whether to prompt before committing anything.
-  const searchExpenses = async () => {
-    if (!genDepartmentId) {
-      setGenerateError('Pilih Department terlebih dahulu.');
-      return;
-    }
-    setSearching(true);
-    setGenerateError('');
-    setShowDuplicateConfirm(false);
+  // DRAFT_SETTLEMENT -> APPROVAL_SLS_MAR_DIR: starts the settlement's own
+  // approval chain (SettlementsService.submitDraft).
+  const submitDraft = async (id: string) => {
+    setSubmittingDraftId(id);
+    setError('');
     try {
-      const result = await api.post<PreviewResult>('/settlements/generate', {
-        departmentId: genDepartmentId,
-        fromDate: genFromDate,
-        toDate: genToDate,
-      });
-      setPreviewResult(result);
-      setSelectedExpenseIds(new Set());
-    } catch (err) {
-      setGenerateError(err instanceof ApiError ? err.message : 'Search failed');
-    } finally {
-      setSearching(false);
-    }
-  };
-
-  const toggleSelectedExpense = (id: string) =>
-    setSelectedExpenseIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  // Generate Settlement step: first checks whether a DRAFT settlement already
-  // covers this exact Department/date-range search (returned alongside the
-  // search results) - if so, ask Yes/No before committing anything;
-  // otherwise there's nothing to conflict with, so create the new settlement
-  // straight away.
-  const handleGenerateSettlement = () => {
-    if (selectedExpenseIds.size === 0) return;
-    if (previewResult?.existingDraftSettlement) {
-      setShowDuplicateConfirm(true);
-      return;
-    }
-    createNewSettlement();
-  };
-
-  // Also doubles as "No" on the duplicate-settlement prompt.
-  const createNewSettlement = async () => {
-    setCreatingSettlement(true);
-    setGenerateError('');
-    try {
-      await api.post('/settlements/from-selection', { departmentId: genDepartmentId, expenseIds: Array.from(selectedExpenseIds) });
-      setShowGenerateModal(false);
+      await api.post(`/settlements/${id}/submit-draft`);
       load();
     } catch (err) {
-      setGenerateError(err instanceof ApiError ? err.message : 'Failed to create settlement');
+      setError(err instanceof ApiError ? err.message : 'Failed to submit settlement');
     } finally {
-      setCreatingSettlement(false);
-    }
-  };
-
-  // "Yes" on the duplicate-settlement prompt.
-  const addSelectionToExisting = async () => {
-    if (!previewResult?.existingDraftSettlement) return;
-    setCreatingSettlement(true);
-    setGenerateError('');
-    try {
-      await api.post(`/settlements/${previewResult.existingDraftSettlement.id}/expenses`, { expenseIds: Array.from(selectedExpenseIds) });
-      setShowGenerateModal(false);
-      load();
-    } catch (err) {
-      setGenerateError(err instanceof ApiError ? err.message : 'Failed to add expenses');
-    } finally {
-      setCreatingSettlement(false);
+      setSubmittingDraftId('');
     }
   };
 
@@ -317,7 +234,7 @@ function SettlementPageInner() {
   };
 
   const rejectExpense = async (expenseId: string) => {
-    const reason = window.prompt('Reject reason:');
+    const reason = await prompt({ title: 'Reject reason', danger: true });
     if (!reason) return;
     setBusy(true);
     setError('');
@@ -356,9 +273,9 @@ function SettlementPageInner() {
             </Link>
           )}
           {canGenerate && (
-            <button className="btn btn-primary" onClick={openGenerateModal}>
+            <Link href="/settlement/create" className="btn btn-primary">
               Create Settlement
-            </button>
+            </Link>
           )}
         </div>
       </div>
@@ -402,9 +319,23 @@ function SettlementPageInner() {
                     <span className={`badge ${r.status === 'COMPLETE' ? 'badge-success' : 'badge-info'}`}>{r.status}</span>
                   </td>
                   <td style={{ display: 'flex', gap: 8 }}>
-                    {canGenerate && r.status === 'DRAFT' && (
+                    {canGenerate && r.status === 'DRAFT_SETTLEMENT' && (
+                      <Link href={`/settlement/${r.id}/edit`} className="btn">
+                        Edit
+                      </Link>
+                    )}
+                    {canGenerate && r.status === 'DRAFT_SETTLEMENT' && (
                       <button className="btn" disabled={busy} onClick={() => openAddExpensesModal(r)}>
                         Add Expenses
+                      </button>
+                    )}
+                    {canGenerate && r.status === 'DRAFT_SETTLEMENT' && (
+                      <button
+                        className="btn btn-primary"
+                        disabled={busy || submittingDraftId === r.id}
+                        onClick={() => submitDraft(r.id)}
+                      >
+                        {submittingDraftId === r.id ? 'Submitting...' : 'Submit'}
                       </button>
                     )}
                     {canManage && r.status === 'DRAFT' && (
@@ -430,7 +361,7 @@ function SettlementPageInner() {
                           const canActOnExpense =
                             !!currentStep &&
                             (currentStep.resolvedApprover?.id === user?.id ||
-                              hasRole('ADMIN') ||
+                              hasRole('ADMINISTRATOR') ||
                               hasPermission('expense.approve.all', 'expense.approve.owndept'));
                           return (
                             <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '4px 0' }}>
@@ -443,10 +374,10 @@ function SettlementPageInner() {
                               )}
                               {canActOnExpense && (
                                 <>
-                                  <button className="btn btn-success" disabled={busy} onClick={() => approveExpense(e.id)}>
+                                  <button className="btn btn-approve" disabled={busy} onClick={() => approveExpense(e.id)}>
                                     Approve ({currentStep?.position.name})
                                   </button>
-                                  <button className="btn btn-danger" disabled={busy} onClick={() => rejectExpense(e.id)}>
+                                  <button className="btn btn-reject" disabled={busy} onClick={() => rejectExpense(e.id)}>
                                     Reject
                                   </button>
                                 </>
@@ -456,6 +387,37 @@ function SettlementPageInner() {
                           );
                         })}
                         {r.expenses.length === 0 && <div style={{ color: 'var(--muted)', fontSize: 12 }}>No expenses</div>}
+
+                        <strong style={{ fontSize: 12, display: 'block', marginTop: 16 }}>
+                          Settlement Approval History
+                        </strong>
+                        <table style={{ marginTop: 4 }}>
+                          <thead>
+                            <tr>
+                              <th>When</th>
+                              <th>Position</th>
+                              <th>Action</th>
+                              <th>Approved By</th>
+                              <th>Reason</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(r.approvalRequest?.actions ?? []).map((a) => (
+                              <tr key={a.id}>
+                                <td>{formatDateTime(a.actedAt)}</td>
+                                <td>{a.position?.name}</td>
+                                <td>{a.action}</td>
+                                <td>{a.actor?.name}</td>
+                                <td>{a.reason || '-'}</td>
+                              </tr>
+                            ))}
+                            {(r.approvalRequest?.actions ?? []).length === 0 && (
+                              <tr>
+                                <td colSpan={5} style={{ color: 'var(--muted)' }}>No actions yet</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
                       </div>
                     </td>
                   </tr>
@@ -484,135 +446,6 @@ function SettlementPageInner() {
           />
         )}
       </div>
-
-      {showGenerateModal && (
-        <Modal title="Create Settlement" onClose={() => setShowGenerateModal(false)} wide>
-          {/* minHeight reserves room below the date fields so the DatePicker's
-              popover calendar (~300px tall) has space to render before Modal's
-              shrink-wrapped card - overflow: hidden - clips anything past its
-              own bounds; without this the popover got cut off. Kept even once
-              previewResult comes back with zero expenses (no table to fill
-              the space) so the popup doesn't visibly shrink on a "not found"
-              result - only a populated table (which already exceeds 480px)
-              drops the floor. */}
-          <div style={{ minHeight: !previewResult || previewResult.expenses.length === 0 ? 480 : undefined }}>
-            <div className="form-grid">
-              <div className="form-row">
-                <label>Department</label>
-                <select value={genDepartmentId} onChange={(e) => setGenDepartmentId(e.target.value)}>
-                  <option value="">Select Department</option>
-                  {departmentOptions.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-row">
-                <label>From</label>
-                <DatePicker value={genFromDate} onChange={setGenFromDate} />
-              </div>
-              <div className="form-row">
-                <label>To</label>
-                <DatePicker value={genToDate} onChange={setGenToDate} />
-              </div>
-            </div>
-
-            {generateError && <div className="error-text">{generateError}</div>}
-
-            <button className="btn btn-primary" disabled={searching} style={{ marginTop: 12 }} onClick={searchExpenses}>
-              {searching ? 'Searching...' : 'Search'}
-            </button>
-          </div>
-
-          {previewResult && (
-            <div style={{ marginTop: 20 }}>
-              {previewResult.expenses.length === 0 ? (
-                <p style={{ fontSize: 13, color: 'var(--muted)' }}>
-                  Tidak ada expense yang cocok (Department/tanggal/sudah matched) untuk dibuatkan settlement.
-                </p>
-              ) : (
-                <>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th style={{ width: 28 }}>
-                          <input
-                            type="checkbox"
-                            style={{ width: 'auto' }}
-                            checked={selectedExpenseIds.size === previewResult.expenses.length}
-                            onChange={(e) =>
-                              setSelectedExpenseIds(e.target.checked ? new Set(previewResult.expenses.map((x) => x.id)) : new Set())
-                            }
-                          />
-                        </th>
-                        <th>Expense No</th>
-                        <th>Date</th>
-                        <th>Sales</th>
-                        <th>Purpose</th>
-                        <th>Amount</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {previewResult.expenses.map((e) => (
-                        <tr key={e.id}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              style={{ width: 'auto' }}
-                              checked={selectedExpenseIds.has(e.id)}
-                              onChange={() => toggleSelectedExpense(e.id)}
-                            />
-                          </td>
-                          <td>
-                            <Link href={`/expenses/${e.id}`}>{e.expenseNo}</Link>
-                          </td>
-                          <td>{formatDate(e.expenseDate)}</td>
-                          <td>{e.sales?.name}</td>
-                          <td>{e.purpose}</td>
-                          <td>{formatCurrency(e.amount)}</td>
-                          <td>
-                            <span className={`badge ${e.status === 'APPROVED' ? 'badge-success' : 'badge-info'}`}>{e.status}</span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-
-                  {showDuplicateConfirm && previewResult.existingDraftSettlement ? (
-                    <div style={{ marginTop: 12, padding: 12, borderRadius: 6, background: 'var(--input-bg)' }}>
-                      <p style={{ fontSize: 13, marginTop: 0 }}>
-                        Settlement sudah ada ({previewResult.existingDraftSettlement.settlementNo}). Apakah anda ingin menambahkan ke
-                        settlement yang sudah ada atau buat settlement baru?
-                      </p>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button className="btn btn-primary" disabled={creatingSettlement} onClick={addSelectionToExisting}>
-                          Yes
-                        </button>
-                        <button className="btn" disabled={creatingSettlement} onClick={createNewSettlement}>
-                          No
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    selectedExpenseIds.size > 0 && (
-                      <button
-                        className="btn btn-primary"
-                        disabled={creatingSettlement}
-                        style={{ marginTop: 12 }}
-                        onClick={handleGenerateSettlement}
-                      >
-                        {creatingSettlement ? 'Generating...' : `Generate Settlement (${selectedExpenseIds.size})`}
-                      </button>
-                    )
-                  )}
-                </>
-              )}
-            </div>
-          )}
-        </Modal>
-      )}
 
       {addModalSettlement && (
         <Modal title={`Add Expenses to ${addModalSettlement.settlementNo}`} onClose={() => setAddModalSettlement(null)} wide>

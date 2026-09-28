@@ -8,13 +8,27 @@ import { usePagination } from '@/lib/usePagination';
 import Modal from '@/components/Modal';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
+import SplashLoader from '@/components/SplashLoader';
 
 interface BatchRow {
   id: string;
   fileName: string;
   createdAt: string;
   uploadedBy: { name: string };
+  department: { id: string; name: string } | null;
+  creditCard: { id: string; bank: string; last4: string } | null;
   _count: { transactions: number };
+}
+
+interface DepartmentOption {
+  id: string;
+  name: string;
+}
+
+interface CreditCardOption {
+  id: string;
+  bank: string;
+  last4: string;
 }
 
 interface MatchedExpense {
@@ -124,7 +138,7 @@ function MatchPicker({ onPick }: { onPick: (expenseId: string) => void }) {
 
 export default function BankMatchingPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<SplashLoader message="Loading" />}>
       <BankMatchingPageInner />
     </Suspense>
   );
@@ -142,6 +156,31 @@ function BankMatchingPageInner() {
   const [batchSearchInput, setBatchSearchInput] = useState('');
   const [txnSearch, setTxnSearch] = useState('');
   const [txnSearchInput, setTxnSearchInput] = useState('');
+  const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
+  const [departmentId, setDepartmentId] = useState('');
+  const [creditCardOptions, setCreditCardOptions] = useState<CreditCardOption[]>([]);
+  const [creditCardId, setCreditCardId] = useState('');
+
+  useEffect(() => {
+    api.get<DepartmentOption[]>('/departments?active=true').then(setDepartmentOptions).catch(() => undefined);
+  }, []);
+
+  // Corporate Card narrows to whichever Department is picked - same relationship
+  // as the Expense form's own Corporate Card dropdown.
+  useEffect(() => {
+    if (!departmentId) {
+      setCreditCardOptions([]);
+      setCreditCardId('');
+      return;
+    }
+    api
+      .get<CreditCardOption[]>(`/credit-cards?departmentId=${departmentId}&active=true`)
+      .then((opts) => {
+        setCreditCardOptions(opts);
+        setCreditCardId((prev) => (opts.some((o) => o.id === prev) ? prev : opts.length === 1 ? opts[0].id : ''));
+      })
+      .catch(() => undefined);
+  }, [departmentId]);
 
   const filteredBatches = batches.filter((b) => {
     if (!batchSearch) return true;
@@ -193,16 +232,19 @@ function BankMatchingPageInner() {
   // (?force=true, same full rebuild as before); TIDAK skips the scan but still
   // re-runs matching against current Expense data via the new rematch endpoint.
   const onUpload = async (files: File[]) => {
+    if (!departmentId) return;
     setUploading(true);
     setError('');
+    const fields: Record<string, string> = { departmentId };
+    if (creditCardId) fields.creditCardId = creditCardId;
     let lastBatch: BatchDetail | null = null;
     try {
       for (const file of files) {
-        let result = (await uploadFile('/bank-settlements', file)) as BatchDetail;
+        let result = (await uploadFile('/bank-settlements', file, '', fields)) as BatchDetail;
         if (result.alreadyScanned) {
           const rescan = await confirmRescan(file.name);
           result = rescan
-            ? ((await uploadFile('/bank-settlements', file, '?force=true')) as BatchDetail)
+            ? ((await uploadFile('/bank-settlements', file, '?force=true', fields)) as BatchDetail)
             : ((await api.post(`/bank-settlements/${result.id}/rematch`)) as BatchDetail);
         }
         lastBatch = result;
@@ -248,14 +290,35 @@ function BankMatchingPageInner() {
       <div className="toolbar">
         <h1>Auto Matching</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
+          <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} style={{ minWidth: 160 }}>
+            <option value="">Department...</option>
+            {departmentOptions.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={creditCardId}
+            onChange={(e) => setCreditCardId(e.target.value)}
+            disabled={!departmentId}
+            style={{ minWidth: 160 }}
+          >
+            <option value="">Corporate Card...</option>
+            {creditCardOptions.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.bank} •••• {c.last4}
+              </option>
+            ))}
+          </select>
+          <label className="btn btn-primary" style={{ cursor: departmentId ? 'pointer' : 'not-allowed', opacity: departmentId ? 1 : 0.5 }}>
             {uploading ? 'Uploading...' : '+ Upload Bank Settlement (PDF, bisa lebih dari 1)'}
             <input
               type="file"
               accept="application/pdf"
               multiple
               style={{ display: 'none' }}
-              disabled={uploading}
+              disabled={uploading || !departmentId}
               onChange={(e) => {
                 const files = Array.from(e.target.files || []);
                 if (files.length > 0) onUpload(files);
@@ -266,7 +329,8 @@ function BankMatchingPageInner() {
         </div>
       </div>
       <p style={{ color: 'var(--muted)', marginTop: -8, fontSize: 12 }}>
-        Upload a bank/credit-card settlement PDF to reconcile it against submitted Expenses by amount, date and merchant name.
+        Upload a bank/credit-card settlement PDF to reconcile it against submitted Expenses (same Department only) by amount, date
+        and merchant name.
       </p>
 
       {error && <div className="error-text">{error}</div>}
@@ -330,6 +394,13 @@ function BankMatchingPageInner() {
               <div style={{ fontSize: 11, color: 'var(--muted)' }}>
                 {formatDateTime(b.createdAt)} · {b._count.transactions} lines · {b.uploadedBy?.name}
               </div>
+              {(b.department || b.creditCard) && (
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  {b.department?.name}
+                  {b.department && b.creditCard ? ' · ' : ''}
+                  {b.creditCard ? `${b.creditCard.bank} •••• ${b.creditCard.last4}` : ''}
+                </div>
+              )}
             </div>
           ))}
           {filteredBatches.length === 0 && <div style={{ color: 'var(--muted)', fontSize: 13 }}>No batches uploaded yet</div>}

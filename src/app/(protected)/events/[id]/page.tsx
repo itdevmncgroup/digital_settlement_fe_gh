@@ -5,6 +5,8 @@ import { useParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDate, formatDateTime } from '@/lib/date';
+import { usePrompt } from '@/components/PromptDialog';
+import SplashLoader from '@/components/SplashLoader';
 
 interface EventDetail {
   id: string;
@@ -62,6 +64,7 @@ function formatCurrency(value: string | number) {
 export default function EventDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { user, hasRole } = useAuth();
+  const prompt = usePrompt();
 
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [approval, setApproval] = useState<ApprovalDetail | null>(null);
@@ -77,7 +80,7 @@ export default function EventDetailPage() {
 
   const isOwner = event?.salesId === user?.id;
   const currentStepInfo = approval && approval.status === 'PENDING' ? approval.steps.find((s) => s.stepOrder === approval.currentStep) : null;
-  const canAct = !!currentStepInfo && (currentStepInfo.resolvedApprover?.id === user?.id || hasRole('ADMIN'));
+  const canAct = !!currentStepInfo && (currentStepInfo.resolvedApprover?.id === user?.id || hasRole('ADMINISTRATOR'));
   const canSubmit = !!event && event.status === 'DRAFT' && isOwner;
 
   const submit = async () => {
@@ -107,7 +110,7 @@ export default function EventDetailPage() {
   };
 
   const reject = async () => {
-    const reason = window.prompt('Reject reason:');
+    const reason = await prompt({ title: 'Reject reason', danger: true });
     if (!reason) return;
     setBusy(true);
     setError('');
@@ -122,7 +125,7 @@ export default function EventDetailPage() {
   };
 
   if (error && !event) return <div className="error-text">{error}</div>;
-  if (!event) return <div>Loading...</div>;
+  if (!event) return <SplashLoader message="Loading" />;
 
   return (
     <div>
@@ -202,10 +205,10 @@ export default function EventDetailPage() {
           )}
           {canAct && (
             <>
-              <button className="btn btn-success" disabled={busy} onClick={approve}>
+              <button className="btn btn-approve" disabled={busy} onClick={approve}>
                 Approve ({currentStepInfo?.position.name})
               </button>
-              <button className="btn btn-danger" disabled={busy} onClick={reject}>
+              <button className="btn btn-reject" disabled={busy} onClick={reject}>
                 Reject
               </button>
             </>

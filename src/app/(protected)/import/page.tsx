@@ -3,6 +3,7 @@
 import { ChangeEvent, Suspense, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api, ApiError, downloadFile, uploadFile } from '@/lib/api';
+import SplashLoader from '@/components/SplashLoader';
 
 type EntityType = 'AGENCY' | 'ADVERTISER' | 'BRAND' | 'MERCHANT';
 
@@ -51,7 +52,7 @@ function StatusBadge({ status }: { status: ImportRowResult['status'] }) {
 // (re-sends the same rows to /commit, which only inserts the VALID ones).
 export default function ImportPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<SplashLoader message="Loading" />}>
       <ImportPageInner />
     </Suspense>
   );

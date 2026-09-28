@@ -13,6 +13,7 @@ import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
 import LocalFileThumb from '@/components/LocalFileThumb';
+import SplashLoader from '@/components/SplashLoader';
 import Modal from '@/components/Modal';
 import ZoomableImage from '@/components/ZoomableImage';
 import { NavIcon } from '@/components/NavIcons';
@@ -64,6 +65,12 @@ function matchedTransaction(row: { bankTransactions: BankTransactionRef[] }) {
 }
 
 const EDITABLE_STATUSES = ['DRAFT', 'REJECTED', 'REVISION'];
+
+// Anything currently sitting with an approver - matches ApprovalStatus.PENDING
+// on the backend's ApprovalRequest for this Expense.
+function isPendingApprovalStatus(status: string) {
+  return status === 'PENDING_APPROVAL' || status.startsWith('APPROVAL_');
+}
 
 interface SimpleOption {
   id: string;
@@ -123,7 +130,7 @@ interface CreditCardOption {
   id: string;
   bank: string;
   last4: string;
-  cardHolderName: string;
+  user: { id: string; name: string } | null;
 }
 
 interface AdvertiserOption {
@@ -234,7 +241,7 @@ function LocalFileZoom({ file }: { file: File }) {
 
 export default function ExpensesPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<SplashLoader message="Loading" />}>
       <ExpensesPageInner />
     </Suspense>
   );
@@ -242,7 +249,7 @@ export default function ExpensesPage() {
 
 function ExpensesPageInner() {
   const { hasRole, hasPermission, user } = useAuth();
-  const canActOnBehalf = hasRole('ADMIN', 'FINANCE');
+  const canActOnBehalf = hasRole('ADMINISTRATOR');
   const canCreate = hasRole('SALES') || canActOnBehalf || hasPermission('expense.create');
   const canAutoMatch = canActOnBehalf || hasPermission('expense.automatch');
   const canExport = canActOnBehalf || hasPermission('expense.export');
@@ -261,8 +268,10 @@ function ExpensesPageInner() {
   const [search, setSearch] = useState(() => searchParams.get('search') ?? '');
   const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [resendingId, setResendingId] = useState<string | null>(null);
 
   const [departmentFilter, setDepartmentFilter] = useState(() => searchParams.get('departmentId') ?? '');
   const [fromDate, setFromDate] = useState(() => searchParams.get('fromDate') ?? defaultFromDate());
@@ -271,7 +280,19 @@ function ExpensesPageInner() {
   const [filterDepartmentOptions, setFilterDepartmentOptions] = useState<DepartmentOption[]>([]);
   const [showAutoMatchModal, setShowAutoMatchModal] = useState(false);
   const [autoMatchFiles, setAutoMatchFiles] = useState<File[]>([]);
+  const [autoMatchDepartmentOptions, setAutoMatchDepartmentOptions] = useState<DepartmentOption[]>([]);
+  const [autoMatchDepartmentId, setAutoMatchDepartmentId] = useState('');
+  const [autoMatchCreditCardOptions, setAutoMatchCreditCardOptions] = useState<CreditCardOption[]>([]);
+  const [autoMatchCreditCardId, setAutoMatchCreditCardId] = useState('');
   const [forceRescan, setForceRescan] = useState(false);
+  const [showScanResult, setShowScanResult] = useState(true);
+  const [scanResultModalOpen, setScanResultModalOpen] = useState(false);
+  // Captures the "Show Scan Result" checkbox's value at the moment a run starts
+  // (a run outlives this modal and can keep going across page navigation - see
+  // AutoMatchProvider), so the popup decision doesn't shift if the checkbox's
+  // own state gets reused/reset before the run finishes.
+  const wantScanResultRef = useRef(true);
+  const wasMatchingRef = useRef(false);
   const {
     running: matching,
     message: matchMessage,
@@ -280,6 +301,16 @@ function ExpensesPageInner() {
     version: matchVersion,
     start: startAutoMatch,
   } = useAutoMatch();
+
+  // Opens the result popup only once a run finishes, and only if the user had
+  // "Show Scan Result" checked when they kicked it off - otherwise the table
+  // below (refreshed via the matchVersion effect) is the only visible change.
+  useEffect(() => {
+    if (wasMatchingRef.current && !matching) {
+      if (wantScanResultRef.current) setScanResultModalOpen(true);
+    }
+    wasMatchingRef.current = matching;
+  }, [matching]);
 
   const [salesOptions, setSalesOptions] = useState<SalesOption[]>([]);
   const [onBehalfOfSalesId, setOnBehalfOfSalesId] = useState('');
@@ -379,6 +410,38 @@ function ExpensesPageInner() {
     api.get<DepartmentOption[]>(path).then(setFilterDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canActOnBehalf]);
+
+  // Auto Match popup: Department combobox is always the logged-in user's own
+  // department(s) - not every department like the ADMIN filter above - since
+  // it tags "this statement file came from department X", not who's allowed
+  // to see what.
+  useEffect(() => {
+    if (!showAutoMatchModal) return;
+    setAutoMatchDepartmentId('');
+    setAutoMatchCreditCardId('');
+    api.get<DepartmentOption[]>('/departments/me').then((opts) => {
+      setAutoMatchDepartmentOptions(opts);
+      if (opts.length === 1) setAutoMatchDepartmentId(opts[0].id);
+    }).catch(() => undefined);
+  }, [showAutoMatchModal]);
+
+  // Corporate Card combobox narrows to whichever Department is picked above -
+  // same "1 Department = 1 credit card" relationship as the Expense form's own
+  // Corporate Card dropdown.
+  useEffect(() => {
+    if (!autoMatchDepartmentId) {
+      setAutoMatchCreditCardOptions([]);
+      setAutoMatchCreditCardId('');
+      return;
+    }
+    api
+      .get<CreditCardOption[]>(`/credit-cards?departmentId=${autoMatchDepartmentId}&active=true`)
+      .then((opts) => {
+        setAutoMatchCreditCardOptions(opts);
+        setAutoMatchCreditCardId((prev) => (opts.some((o) => o.id === prev) ? prev : opts.length === 1 ? opts[0].id : ''));
+      })
+      .catch(() => undefined);
+  }, [autoMatchDepartmentId]);
 
   const exportExcel = () => {
     const qs = buildListParams().toString();
@@ -627,6 +690,10 @@ function ExpensesPageInner() {
       setError('Advertiser, Brand, Unit and Activity Type must all be picked.');
       return;
     }
+    if (!form.paymentMethodId) {
+      setError('Payment Method is required.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -702,6 +769,20 @@ function ExpensesPageInner() {
     }
   };
 
+  const resendApprovalEmail = async (expenseId: string) => {
+    setResendingId(expenseId);
+    setError('');
+    setNotice('');
+    try {
+      await api.post(`/expenses/${expenseId}/resend-approval-email`);
+      setNotice('Reminder email sent to the current approver.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to resend approval email');
+    } finally {
+      setResendingId(null);
+    }
+  };
+
   const noSalesReason = canActOnBehalf && !onBehalfOfSalesId ? 'Pick a Sales to fill in this expense on their behalf.' : null;
   // Advertiser/Brand have no single inherited value anymore (Pre-Event is retired) -
   // the first entry picked in the Advertiser/Brand lists below becomes the primary
@@ -721,15 +802,6 @@ function ExpensesPageInner() {
             onChange={setSearchInput}
             onSearch={() => setSearch(searchInput)}
           />
-          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: 220 }}>
-            <option value="">Settled only</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-            <option value={ALL_STATUSES_VALUE}>All statuses (incl. drafts, default)</option>
-          </select>
           {canAutoMatch && (
             <button className="btn" onClick={() => setShowAutoMatchModal(true)}>
               <NavIcon name="search" /> Auto Match
@@ -769,6 +841,15 @@ function ExpensesPageInner() {
               </option>
             ))}
           </select>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: 220 }}>
+            <option value="">Settled only</option>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+            <option value={ALL_STATUSES_VALUE}>All statuses (incl. drafts, default)</option>
+          </select>
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
             From
             <DatePicker value={fromDate} onChange={setFromDate} style={{ width: 150 }} />
@@ -788,15 +869,14 @@ function ExpensesPageInner() {
         </div>
       </div>
 
-      {matchMessage && !matching && (
-        <div className="card" style={{ marginBottom: 12, fontSize: 13 }}>
-          {matchMessage}
-        </div>
-      )}
-      {matchError && !matching && <div className="error-text" style={{ marginBottom: 12 }}>{matchError}</div>}
-      {matchedBatches.length > 0 && !matching && (
-        <div className="card" style={{ marginBottom: 12 }}>
-          <h3 style={{ marginTop: 0, fontSize: 14 }}>Scanned Data</h3>
+      {scanResultModalOpen && !matching && (matchedBatches.length > 0 || matchError) && (
+        <Modal title="Scan Result" onClose={() => setScanResultModalOpen(false)} wide>
+          {matchMessage && (
+            <div className="card" style={{ marginBottom: 12, fontSize: 13 }}>
+              {matchMessage}
+            </div>
+          )}
+          {matchError && <div className="error-text" style={{ marginBottom: 12 }}>{matchError}</div>}
           <table>
             <thead>
               <tr>
@@ -843,7 +923,7 @@ function ExpensesPageInner() {
               )}
             </tbody>
           </table>
-        </div>
+        </Modal>
       )}
       {showAutoMatchModal && (
         <Modal title="Auto Match — Upload Bank Settlement PDF" onClose={() => setShowAutoMatchModal(false)}>
@@ -851,10 +931,42 @@ function ExpensesPageInner() {
             Upload one or more bank/credit-card settlement PDFs. They&apos;ll be scanned and matched against expenses in the
             background — you can keep working while it runs.
           </p>
+          <label style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+            Department
+            <select
+              value={autoMatchDepartmentId}
+              onChange={(e) => setAutoMatchDepartmentId(e.target.value)}
+              style={{ display: 'block', width: '100%', marginTop: 2 }}
+            >
+              <option value="">Select department...</option>
+              {autoMatchDepartmentOptions.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+            Corporate Card
+            <select
+              value={autoMatchCreditCardId}
+              onChange={(e) => setAutoMatchCreditCardId(e.target.value)}
+              disabled={!autoMatchDepartmentId}
+              style={{ display: 'block', width: '100%', marginTop: 2 }}
+            >
+              <option value="">Select corporate card...</option>
+              {autoMatchCreditCardOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.bank} •••• {c.last4}
+                </option>
+              ))}
+            </select>
+          </label>
           <input
             type="file"
             accept="application/pdf"
             multiple
+            style={{ marginTop: 8 }}
             onChange={(e) => setAutoMatchFiles(Array.from(e.target.files || []))}
           />
           {autoMatchFiles.length > 0 && (
@@ -868,15 +980,28 @@ function ExpensesPageInner() {
             <input type="checkbox" checked={forceRescan} onChange={(e) => setForceRescan(e.target.checked)} style={{ width: 'auto' }} />
             Scan ulang meski file sudah pernah discan
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={showScanResult}
+              onChange={(e) => setShowScanResult(e.target.checked)}
+              style={{ width: 'auto' }}
+            />
+            Show Scan Result
+          </label>
           <button
             className="btn btn-primary"
             style={{ marginTop: 12 }}
-            disabled={autoMatchFiles.length === 0 || matching}
+            disabled={autoMatchFiles.length === 0 || !autoMatchDepartmentId || matching}
             onClick={() => {
               const files = autoMatchFiles;
+              const departmentId = autoMatchDepartmentId;
+              const creditCardId = autoMatchCreditCardId;
+              wantScanResultRef.current = showScanResult;
+              setScanResultModalOpen(false);
               setShowAutoMatchModal(false);
               setAutoMatchFiles([]);
-              startAutoMatch(files, forceRescan);
+              startAutoMatch(files, forceRescan, departmentId, creditCardId);
             }}
           >
             {matching ? 'A match is already running...' : 'Upload & Match'}
@@ -993,10 +1118,11 @@ function ExpensesPageInner() {
                 <div className="form-row">
                   <label>Payment Method</label>
                   <select
+                    required
                     value={form.paymentMethodId}
                     onChange={(e) => setForm({ ...form, paymentMethodId: e.target.value, creditCardId: '', paymentMethodNote: '' })}
                   >
-                    <option value="">- (optional)</option>
+                    <option value="">Select...</option>
                     {paymentMethodOptions.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name}
@@ -1016,7 +1142,7 @@ function ExpensesPageInner() {
                       <option value="">{form.departmentId ? 'Select card' : 'Select a Department first'}</option>
                       {creditCardOptions.map((c) => (
                         <option key={c.id} value={c.id}>
-                          {c.bank} •••• {c.last4} ({c.cardHolderName})
+                          {c.bank} •••• {c.last4} ({c.user?.name ?? '-'})
                         </option>
                       ))}
                     </select>
@@ -1427,6 +1553,7 @@ function ExpensesPageInner() {
       )}
 
       {error && <div className="error-text">{error}</div>}
+      {notice && <div style={{ color: 'var(--success, #16a34a)' }}>{notice}</div>}
 
       <div className="card">
         <table>
@@ -1449,10 +1576,11 @@ function ExpensesPageInner() {
           <tbody>
             {pagination.pageRows.map((r) => {
               const canEdit = EDITABLE_STATUSES.includes(r.status) && (r.salesId === user?.id || canActOnBehalf);
+              const canResend = isPendingApprovalStatus(r.status) && (r.salesId === user?.id || canActOnBehalf);
               const matched = isMatched(r);
               const txn = matchedTransaction(r);
               return (
-                <tr key={r.id}>
+                <tr key={r.id} className={matched ? 'row-matched' : undefined}>
                   <td>
                     <Link href={`/expenses/${r.id}`}>{r.expenseNo}</Link>
                   </td>
@@ -1479,11 +1607,24 @@ function ExpensesPageInner() {
                     )}
                   </td>
                   <td>
-                    {canEdit && (
-                      <Link href={`/expenses/${r.id}`} className="btn">
-                        Edit
-                      </Link>
-                    )}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {canEdit && (
+                        <Link href={`/expenses/${r.id}`} className="btn">
+                          Edit
+                        </Link>
+                      )}
+                      {canResend && (
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={resendingId === r.id}
+                          onClick={() => resendApprovalEmail(r.id)}
+                          title="Resend the approval reminder email to the current approver"
+                        >
+                          {resendingId === r.id ? 'Sending...' : 'Resend'}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );

@@ -9,6 +9,7 @@ import DatePicker from '@/components/DatePicker';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
+import { usePrompt } from '@/components/PromptDialog';
 
 interface DepartmentOption {
   id: string;
@@ -43,6 +44,7 @@ interface PendingApproval {
   steps: StepInfo[];
   expense: DocSummary | null;
   event: DocSummary | null;
+  isMyTurn: boolean;
 }
 
 function formatCurrency(value: string | number) {
@@ -58,13 +60,18 @@ const defaultToDate = () => new Date().toISOString().slice(0, 10);
 
 export default function ApprovalsPage() {
   const { user, hasRole } = useAuth();
-  const canActOnBehalf = hasRole('ADMIN', 'FINANCE');
+  const canActOnBehalf = hasRole('ADMINISTRATOR');
+  const prompt = usePrompt();
 
   const [rows, setRows] = useState<PendingApproval[]>([]);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [fromDate, setFromDate] = useState(defaultFromDate);
@@ -109,7 +116,65 @@ export default function ApprovalsPage() {
   // step resolves to - an expense.approve.all/owndept holder can still act via
   // the Expense detail page (backend's assertApprovalOverride still allows it),
   // it just isn't surfaced as a button on every department-wide pending row in this list.
-  const canActOn = (step: StepInfo | undefined) => !!step && (step.resolvedApprover?.id === user?.id || hasRole('ADMIN'));
+  const canActOn = (step: StepInfo | undefined) => !!step && (step.resolvedApprover?.id === user?.id || hasRole('ADMINISTRATOR'));
+
+  // Bulk selection is Expense-only, same restriction as the mobile app
+  // (ApprovalsListScreen._selectable): a Pre-Event row still goes through its
+  // own single approve/reject action, and Settlement rows aren't listed here
+  // at all (they're reviewed member-by-member from the Settlement page).
+  const isSelectable = (r: PendingApproval) => !!r.expense && canActOn(r.steps.find((s) => s.stepOrder === r.currentStep));
+
+  const toggleSelectMode = () => {
+    setSelectMode((v) => !v);
+    setSelectedIds(new Set());
+  };
+
+  const toggleSelected = (r: PendingApproval) => {
+    if (!isSelectable(r)) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(r.expense!.id)) next.delete(r.expense!.id);
+      else next.add(r.expense!.id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = (visibleRows: PendingApproval[]) => {
+    const selectableIds = visibleRows.filter(isSelectable).map((r) => r.expense!.id);
+    setSelectedIds((prev) => (prev.size === selectableIds.length ? new Set() : new Set(selectableIds)));
+  };
+
+  // Backend has no batch approve/reject endpoint (see approvals.controller.ts) -
+  // each selected expense fires its own call, one at a time so one failure
+  // doesn't fire a burst of retries; failures are collected and reported
+  // together instead of aborting the whole batch.
+  const runBulk = async (call: (id: string) => Promise<unknown>) => {
+    const ids = Array.from(selectedIds);
+    setBulkBusy(true);
+    let success = 0;
+    const failures: string[] = [];
+    for (const id of ids) {
+      try {
+        await call(id);
+        success++;
+      } catch (err) {
+        failures.push(err instanceof ApiError ? err.message : 'Failed');
+      }
+    }
+    setBulkBusy(false);
+    setSelectMode(false);
+    setSelectedIds(new Set());
+    setError(failures.length === 0 ? '' : `${success} succeeded, ${failures.length} failed: ${failures[0]}`);
+    load();
+  };
+
+  const bulkApprove = () => runBulk((id) => api.post(`/approvals/expense/${id}/approve`));
+
+  const bulkReject = async () => {
+    const reason = await prompt({ title: `Reject ${selectedIds.size} expense(s)`, label: 'Reason', danger: true });
+    if (!reason) return;
+    runBulk((id) => api.post(`/approvals/expense/${id}/reject`, { reason }));
+  };
 
   const approve = async (r: PendingApproval) => {
     setBusyId(r.id);
@@ -127,7 +192,7 @@ export default function ApprovalsPage() {
   };
 
   const reject = async (r: PendingApproval) => {
-    const reason = window.prompt('Reject reason:');
+    const reason = await prompt({ title: 'Reject reason', danger: true });
     if (!reason) return;
     setBusyId(r.id);
     setError('');
@@ -146,13 +211,18 @@ export default function ApprovalsPage() {
   return (
     <div>
       <div className="toolbar">
-        <h1>Pending Approval</h1>
-        <SearchBox
-          placeholder="Search doc no, sales, unit, advertiser, brand..."
-          value={searchInput}
-          onChange={setSearchInput}
-          onSearch={() => setSearch(searchInput)}
-        />
+        <h1>{selectMode ? `${selectedIds.size} selected` : 'Pending Approval'}</h1>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <SearchBox
+            placeholder="Search doc no, sales, unit, advertiser, brand..."
+            value={searchInput}
+            onChange={setSearchInput}
+            onSearch={() => setSearch(searchInput)}
+          />
+          <button className="btn" disabled={bulkBusy} onClick={toggleSelectMode}>
+            {selectMode ? 'Cancel' : 'Select'}
+          </button>
+        </div>
       </div>
       <div className="toolbar" style={{ marginTop: -4 }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -175,10 +245,34 @@ export default function ApprovalsPage() {
         </div>
       </div>
       {error && <div className="error-text">{error}</div>}
+      {selectMode && selectedIds.size > 0 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>{selectedIds.size} expense(s) selected</span>
+          <button className="btn btn-approve" disabled={bulkBusy} onClick={bulkApprove}>
+            {bulkBusy ? 'Processing...' : 'Approve Selected'}
+          </button>
+          <button className="btn btn-reject" disabled={bulkBusy} onClick={bulkReject}>
+            Reject Selected
+          </button>
+        </div>
+      )}
       <div className="card">
         <table>
           <thead>
             <tr>
+              {selectMode && (
+                <th style={{ width: 28 }}>
+                  <input
+                    type="checkbox"
+                    style={{ width: 'auto' }}
+                    checked={
+                      pagination.pageRows.some(isSelectable) &&
+                      pagination.pageRows.filter(isSelectable).every((r) => selectedIds.has(r.expense!.id))
+                    }
+                    onChange={() => toggleSelectAll(pagination.pageRows)}
+                  />
+                </th>
+              )}
               <th>Stage</th>
               <th>Doc No</th>
               <th>Date</th>
@@ -202,8 +296,20 @@ export default function ApprovalsPage() {
               const date = r.expense ? doc.expenseDate : doc.date;
               const currentStep = r.steps.find((s) => s.stepOrder === r.currentStep);
               const busy = busyId === r.id;
+              const selectable = isSelectable(r);
               return (
-                <tr key={r.id}>
+                <tr key={r.id} style={selectMode && !selectable ? { opacity: 0.5 } : undefined}>
+                  {selectMode && (
+                    <td>
+                      <input
+                        type="checkbox"
+                        style={{ width: 'auto' }}
+                        disabled={!selectable}
+                        checked={selectable && selectedIds.has(r.expense!.id)}
+                        onChange={() => toggleSelected(r)}
+                      />
+                    </td>
+                  )}
                   <td>{r.documentStage === 'PRE_EVENT' ? 'Pre-Event' : r.documentStage === 'EXPENSES' ? 'Expenses' : 'Settlement'}</td>
                   <td>
                     <Link href={href}>{docNo}</Link>
@@ -221,10 +327,10 @@ export default function ApprovalsPage() {
                   <td>
                     {canActOn(currentStep) && (
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-success" disabled={busy} onClick={() => approve(r)}>
+                        <button className="btn btn-approve" disabled={busy} onClick={() => approve(r)}>
                           Approve
                         </button>
-                        <button className="btn btn-danger" disabled={busy} onClick={() => reject(r)}>
+                        <button className="btn btn-reject" disabled={busy} onClick={() => reject(r)}>
                           Reject
                         </button>
                       </div>
@@ -235,7 +341,7 @@ export default function ApprovalsPage() {
             })}
             {filteredRows.length === 0 && (
               <tr>
-                <td colSpan={11} style={{ color: 'var(--muted)' }}>Nothing pending your approval</td>
+                <td colSpan={selectMode ? 12 : 11} style={{ color: 'var(--muted)' }}>Nothing pending your approval</td>
               </tr>
             )}
           </tbody>

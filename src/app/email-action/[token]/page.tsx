@@ -90,14 +90,14 @@ export default function EmailActionPage() {
               </tbody>
             </table>
 
-            <a href={`${API_URL}/public/approvals/${token}/approve`} className="btn btn-success" style={{ marginBottom: 16, justifyContent: 'center' }}>
+            <a href={`${API_URL}/public/approvals/${token}/approve`} className="btn btn-approve" style={{ marginBottom: 16, justifyContent: 'center' }}>
               Approve
             </a>
 
             <label>Reject reason</label>
             <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this being rejected?" />
             {error && <div className="error-text">{error}</div>}
-            <button className="btn btn-danger" disabled={submitting} onClick={submitReject} style={{ marginTop: 12, width: '100%', justifyContent: 'center' }}>
+            <button className="btn btn-reject" disabled={submitting} onClick={submitReject} style={{ marginTop: 12, width: '100%', justifyContent: 'center' }}>
               {submitting ? 'Submitting...' : 'Reject'}
             </button>
           </>

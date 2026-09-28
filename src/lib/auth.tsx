@@ -10,6 +10,7 @@ export interface CurrentUser {
   name: string;
   email: string;
   unitId?: string | null;
+  position?: { code: string; name: string } | null;
   roles: string[];
   permissions: string[];
 }

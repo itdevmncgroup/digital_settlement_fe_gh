@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import DatePicker from '@/components/DatePicker';
 import DonutChart from '@/components/DonutChart';
 import SimpleBarChart from '@/components/SimpleBarChart';
@@ -84,6 +85,7 @@ const STATUS_OPTIONS = [
   'APPROVAL_DEPT_HEAD',
   'APPROVAL_DIV_HEAD',
   'APPROVAL_BOD',
+  'APPROVAL_CO_CSO',
   'APPROVAL_CO_CSO_1',
   'APPROVAL_CO_CSO_2',
   'REJECTED',
@@ -143,6 +145,9 @@ function ReconciliationStatusBadge({ status }: { status: string | null }) {
 }
 
 export default function ExpenseAnalyticsDashboardPage() {
+  const { hasRole, hasPermission } = useAuth();
+  const canViewAllDepartments = hasRole('ADMINISTRATOR') || hasPermission('dashboard.read.all');
+
   const [draftFrom, setDraftFrom] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 3);
@@ -168,9 +173,11 @@ export default function ExpenseAnalyticsDashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get<DepartmentOption[]>('/departments?active=true').then(setDepartmentOptions).catch(() => undefined);
+    const path = canViewAllDepartments ? '/departments?active=true' : '/departments/me';
+    api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     api.get<CategoryOption[]>('/expense-categories?active=true').then(setCategoryOptions).catch(() => undefined);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canViewAllDepartments]);
 
   useEffect(() => {
     const qs = buildQuery(appliedFilter);
@@ -301,7 +308,7 @@ export default function ExpenseAnalyticsDashboardPage() {
           <span style={{ color: 'var(--muted)', fontSize: 12 }}>to</span>
           <DatePicker value={draftTo} onChange={setDraftTo} style={{ width: 135 }} />
           <select value={draftDepartmentId} onChange={(e) => setDraftDepartmentId(e.target.value)} style={{ width: 140 }}>
-            <option value="">All POD</option>
+            <option value="">{canViewAllDepartments ? 'All POD' : 'All my POD'}</option>
             {departmentOptions.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.name}

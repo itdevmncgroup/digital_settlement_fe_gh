@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { usePagination } from '@/lib/usePagination';
 import DatePicker from '@/components/DatePicker';
 import Pagination from '@/components/Pagination';
@@ -119,6 +120,9 @@ function statusLabel(status: string) {
 }
 
 export default function AuditReportDashboardPage() {
+  const { hasRole, hasPermission } = useAuth();
+  const canViewAllDepartments = hasRole('ADMINISTRATOR') || hasPermission('audit-report.read.all');
+
   const [draftFrom, setDraftFrom] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 3);
@@ -155,8 +159,10 @@ export default function AuditReportDashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get<DepartmentOption[]>('/departments?active=true').then(setDepartmentOptions).catch(() => undefined);
-  }, []);
+    const path = canViewAllDepartments ? '/departments?active=true' : '/departments/me';
+    api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canViewAllDepartments]);
 
   useEffect(() => {
     const qs = buildQuery(appliedFilter);
@@ -283,7 +289,7 @@ export default function AuditReportDashboardPage() {
           <span style={{ color: 'var(--muted)', fontSize: 12 }}>to</span>
           <DatePicker value={draftTo} onChange={setDraftTo} style={{ width: 135 }} />
           <select value={draftDepartmentId} onChange={(e) => setDraftDepartmentId(e.target.value)} style={{ width: 140 }}>
-            <option value="">All POD</option>
+            <option value="">{canViewAllDepartments ? 'All POD' : 'All my POD'}</option>
             {departmentOptions.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.name}

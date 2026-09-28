@@ -399,6 +399,17 @@ h1, h2, h3 {
   }
 }
 
+/* Sweeping bar for a step whose own duration can't be tracked (e.g. one file's
+   PDF parse/OCR mid-upload) - signals "still working", not literal percent. */
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
 /* ---------- Surfaces ---------- */
 
 .card {
@@ -486,6 +497,18 @@ tr {
 
 tr:hover td {
   background: var(--table-hover);
+}
+
+/* Matched row highlight - a light tint of --success over the surface color
+   (not a solid fill) so the default --text color it sits on top of stays at
+   its normal contrast ratio in both themes, instead of hardcoding a text
+   color that only works against one specific green. */
+tr.row-matched td {
+  background: color-mix(in srgb, var(--success) 14%, var(--surface));
+}
+
+tr.row-matched:hover td {
+  background: color-mix(in srgb, var(--success) 24%, var(--surface));
 }
 
 /* ---------- Buttons ---------- */
@@ -636,10 +659,38 @@ label {
 .badge-warning { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
 .badge-info { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
 
+/* Modernized from a bare line of red text into a small alert card - every
+   page's existing `{error && <div className="error-text">{error}</div>}`
+   picks this up automatically, no JS changes needed. */
 .error-text {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: var(--radius);
+  padding: 10px 12px;
   font-size: 13px;
+  line-height: 1.45;
   margin-top: 8px;
+  animation: fade-in-up 0.2s ease both;
+}
+
+.error-text::before {
+  content: '!';
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 1px;
 }
 
 .toolbar {
@@ -924,4 +975,222 @@ label {
   .theme-toggle span {
     display: none;
   }
+}
+
+/* ---------- Toasts (src/components/ToastProvider.tsx) ---------- */
+
+.toast-viewport {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 12px 14px;
+  pointer-events: auto;
+  animation: toast-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.toast.toast-leaving {
+  animation: toast-out 0.18s ease both;
+}
+
+.toast-icon {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  margin-top: 1px;
+}
+
+.toast-success .toast-icon { background: var(--success); }
+.toast-error .toast-icon { background: var(--danger); }
+.toast-warning .toast-icon { background: var(--warning); color: #291c00; }
+.toast-info .toast-icon { background: var(--primary); }
+
+.toast-body {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.toast-close {
+  flex: none;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px;
+  margin: -2px -2px 0 0;
+}
+
+.toast-close:hover {
+  color: var(--text);
+}
+
+.toast-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: color-mix(in srgb, var(--text) 25%, transparent);
+  animation-name: toast-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.toast-success .toast-progress { background: var(--success); }
+.toast-error .toast-progress { background: var(--danger); }
+.toast-warning .toast-progress { background: var(--warning); }
+.toast-info .toast-progress { background: var(--primary); }
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    max-height: 200px;
+    margin-bottom: 0;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(24px) scale(0.98);
+    max-height: 0;
+  }
+}
+
+@keyframes toast-progress {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+
+/* ---------- Confirm / Prompt dialogs (ConfirmDialog.tsx, PromptDialog.tsx) ---------- */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 7, 12, 0.65);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2100;
+  padding: 24px;
+  animation: fade-in-up 0.15s ease both;
+}
+
+.dialog-card {
+  width: 100%;
+  max-width: 420px;
+  background: linear-gradient(155deg, var(--surface) 0%, var(--surface-2) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 20px;
+  animation: dialog-pop 0.2s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes dialog-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.dialog-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 12px;
+}
+
+.dialog-icon.dialog-icon-danger { background: var(--danger); }
+.dialog-icon.dialog-icon-info { background: var(--gradient-brand); }
+
+.dialog-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
+.dialog-message {
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.dialog-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* ---------- Field validation (FormValidationGuard.tsx) ---------- */
+
+.field-invalid {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent) !important;
+  animation: field-shake 0.32s ease;
+}
+
+@keyframes field-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
 }

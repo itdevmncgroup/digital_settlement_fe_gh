@@ -10,6 +10,7 @@ import DatePicker from '@/components/DatePicker';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
+import { usePrompt } from '@/components/PromptDialog';
 
 interface Option {
   id: string;
@@ -77,8 +78,9 @@ function formatCurrency(value: string | number) {
 // the Department-scoped Approval Level chain (see /events/[id] for the trail).
 export default function EventsPage() {
   const { hasRole, user } = useAuth();
-  const canActOnBehalf = hasRole('ADMIN', 'FINANCE');
+  const canActOnBehalf = hasRole('ADMINISTRATOR');
   const canCreate = hasRole('SALES') || canActOnBehalf;
+  const prompt = usePrompt();
 
   const [rows, setRows] = useState<EventRow[]>([]);
   const [status, setStatus] = useState('');
@@ -183,7 +185,7 @@ export default function EventsPage() {
   // Editable while DRAFT or SUBMITTED (i.e. any time before the approval chain finishes).
   const canEditRow = (r: EventRow) => (r.status === 'DRAFT' || r.status === 'SUBMITTED') && (r.salesId === user?.id || canActOnBehalf);
 
-  const isAdmin = hasRole('ADMIN');
+  const isAdmin = hasRole('ADMINISTRATOR');
   const [busyId, setBusyId] = useState<string | null>(null);
 
   // Current step of a row's approval chain, if any - the only step ever
@@ -213,7 +215,7 @@ export default function EventsPage() {
   };
 
   const rejectRow = async (id: string) => {
-    const reason = window.prompt('Reject reason:');
+    const reason = await prompt({ title: 'Reject reason', danger: true });
     if (!reason) return;
     setBusyId(id);
     setError('');
@@ -424,10 +426,10 @@ export default function EventsPage() {
                     )}
                     {canActOnRow(r) && (
                       <>
-                        <button className="btn btn-success" disabled={busyId === r.id} onClick={() => approveRow(r.id)}>
+                        <button className="btn btn-approve" disabled={busyId === r.id} onClick={() => approveRow(r.id)}>
                           Approve ({currentStepOf(r)?.position.name})
                         </button>
-                        <button className="btn btn-danger" disabled={busyId === r.id} onClick={() => rejectRow(r.id)}>
+                        <button className="btn btn-reject" disabled={busyId === r.id} onClick={() => rejectRow(r.id)}>
                           Reject
                         </button>
                       </>

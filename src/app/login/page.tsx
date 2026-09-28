@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { ApiError } from '@/lib/api';
 import { NavIcon } from '@/components/NavIcons';
+import SplashLoader from '@/components/SplashLoader';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -13,6 +14,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -20,6 +22,7 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email, password);
+      setSignedIn(true);
       router.replace('/');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Login failed');
@@ -27,6 +30,9 @@ export default function LoginPage() {
       setSubmitting(false);
     }
   };
+
+  // Keep the branded splash up from a successful login until the destination renders.
+  if (signedIn) return <SplashLoader message="Signing you in" />;
 
   return (
     <div className="login-page">

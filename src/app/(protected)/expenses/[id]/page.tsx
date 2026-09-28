@@ -9,6 +9,8 @@ import NumberInput from '@/components/NumberInput';
 import DatePicker from '@/components/DatePicker';
 import FileThumb from '@/components/FileThumb';
 import Modal from '@/components/Modal';
+import { usePrompt } from '@/components/PromptDialog';
+import SplashLoader from '@/components/SplashLoader';
 
 interface InvoiceFile {
   id: string;
@@ -60,7 +62,7 @@ interface CreditCardOption {
   id: string;
   bank: string;
   last4: string;
-  cardHolderName: string;
+  user: { id: string; name: string } | null;
 }
 
 type ParticipantCategory = 'AGENCY' | 'ADVERTISER' | 'EMPLOYEE';
@@ -106,7 +108,7 @@ interface Expense {
   advertiser: { id: string; name: string };
   brand: { id: string; name: string };
   activityType: { name: string };
-  creditCard: { bank: string; last4: string; cardHolderName: string } | null;
+  creditCard: { bank: string; last4: string; user: { id: string; name: string } | null } | null;
   creditCardId: string | null;
   paymentMethodId: string | null;
   paymentMethod: { id: string; code: string; name: string } | null;
@@ -187,6 +189,7 @@ export default function ExpenseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { user, hasRole, hasPermission } = useAuth();
+  const prompt = usePrompt();
 
   const [expense, setExpense] = useState<Expense | null>(null);
   const [approval, setApproval] = useState<ApprovalDetail | null>(null);
@@ -279,13 +282,22 @@ export default function ExpenseDetailPage() {
   }, [expense?.department?.id]);
 
   const isOwner = expense?.salesId === user?.id;
-  const isOwnerOrBackOffice = isOwner || hasRole('ADMIN', 'FINANCE');
+  const isOwnerOrBackOffice = isOwner || hasRole('ADMINISTRATOR');
   // expense.edit.owndept is shown optimistically, same caveat as expense.approve.owndept
   // below - the backend's canEditExpense() is authoritative and 403s if the expense's
   // Department isn't actually the actor's.
   const canEditFields =
     !!expense &&
     (isOwnerOrBackOffice || hasPermission('expense.edit.all', 'expense.edit.owndept')) &&
+    !LOCKED_STATUSES.includes(expense.status);
+  // Photos/invoices are attached via an edit: no expense.edit.* permission (own -
+  // owner only, all/owndept - broader) means no upload controls, even for the owner.
+  // ADMIN is exempt. The backend enforces the same rule.
+  const canUploadFiles =
+    !!expense &&
+    (hasRole('ADMINISTRATOR') ||
+      hasPermission('expense.edit.all', 'expense.edit.owndept') ||
+      (isOwner && hasPermission('expense.edit.own'))) &&
     !LOCKED_STATUSES.includes(expense.status);
   const currentStepInfo = approval && approval.status === 'PENDING' ? approval.steps.find((s) => s.stepOrder === approval.currentStep) : null;
   // Only the step's actual resolvedApprover (or an ADMIN override) sees the
@@ -294,8 +306,8 @@ export default function ExpenseDetailPage() {
   // list), so after they approve their own step the button doesn't linger for
   // the next approver's step. That permission still works via the backend's
   // assertApprovalOverride if someone needs to act on someone else's step.
-  const canAct = !!currentStepInfo && (currentStepInfo.resolvedApprover?.id === user?.id || hasRole('ADMIN'));
-  const canMatch = hasRole('ADMIN', 'FINANCE') || hasPermission('expense.match.all', 'expense.match.ownpod');
+  const canAct = !!currentStepInfo && (currentStepInfo.resolvedApprover?.id === user?.id || hasRole('ADMINISTRATOR'));
+  const canMatch = hasRole('ADMINISTRATOR') || hasPermission('expense.match.all', 'expense.match.owndept');
   const matchedTxn = expense?.bankTransactions.find((t) => MATCHED_TXN_STATUSES.includes(t.status)) ?? null;
 
   const startEditFields = () => {
@@ -353,6 +365,10 @@ export default function ExpenseDetailPage() {
 
   const saveFields = async (e: FormEvent) => {
     e.preventDefault();
+    if (!editForm.paymentMethodId) {
+      setError('Payment Method is required.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -392,6 +408,18 @@ export default function ExpenseDetailPage() {
     }
   };
 
+  const submitDraft = async () => {
+    setBusy(true);
+    try {
+      await api.post(`/expenses/${id}/submit`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Submit failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const approve = async () => {
     setBusy(true);
     try {
@@ -405,7 +433,7 @@ export default function ExpenseDetailPage() {
   };
 
   const reject = async () => {
-    const reason = window.prompt('Reject reason:');
+    const reason = await prompt({ title: 'Reject reason', danger: true });
     if (!reason) return;
     setBusy(true);
     try {
@@ -547,7 +575,7 @@ export default function ExpenseDetailPage() {
   };
 
   if (error && !expense) return <div className="error-text">{error}</div>;
-  if (!expense) return <div>Loading...</div>;
+  if (!expense) return <SplashLoader message="Loading" />;
 
   const editSelectedPaymentMethodCode = paymentMethodOptions.find((m) => m.id === editForm.paymentMethodId)?.code;
 
@@ -572,6 +600,16 @@ export default function ExpenseDetailPage() {
           {canEditFields && (
             <button className="btn" onClick={() => (editingFields ? setEditingFields(false) : startEditFields())}>
               {editingFields ? 'Cancel Edit' : 'Edit'}
+            </button>
+          )}
+          {canEditFields && expense.status === 'DRAFT' && (
+            <button
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={submitDraft}
+              title="Send this draft into the approval chain"
+            >
+              {busy ? 'Submitting...' : 'Submit for Approval'}
             </button>
           )}
         </div>
@@ -653,10 +691,11 @@ export default function ExpenseDetailPage() {
             <div className="form-row">
               <label>Payment Method</label>
               <select
+                required
                 value={editForm.paymentMethodId}
                 onChange={(e) => setEditForm({ ...editForm, paymentMethodId: e.target.value, creditCardId: '', paymentMethodNote: '' })}
               >
-                <option value="">- (optional)</option>
+                <option value="">Select...</option>
                 {paymentMethodOptions.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
@@ -676,7 +715,7 @@ export default function ExpenseDetailPage() {
                   <option value="">{expense.department ? 'Select card' : 'This expense has no Department'}</option>
                   {creditCardOptions.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.bank} •••• {c.last4} ({c.cardHolderName})
+                      {c.bank} •••• {c.last4} ({c.user?.name ?? '-'})
                     </option>
                   ))}
                 </select>
@@ -959,13 +998,13 @@ export default function ExpenseDetailPage() {
             </div>
           )}
 
-          <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+          <div style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {canAct && (
               <>
-                <button className="btn btn-success" disabled={busy} onClick={approve}>
+                <button className="btn btn-approve" disabled={busy} onClick={approve}>
                   Approve ({currentStepInfo?.position.name})
                 </button>
-                <button className="btn btn-danger" disabled={busy} onClick={reject}>
+                <button className="btn btn-reject" disabled={busy} onClick={reject}>
                   Reject
                 </button>
               </>
@@ -977,7 +1016,7 @@ export default function ExpenseDetailPage() {
       <div className="card">
         <div className="toolbar">
           <h3 style={{ margin: 0 }}>Invoices</h3>
-          {canEditFields && (
+          {canUploadFiles && (
             <button className="btn" onClick={() => setShowInvoiceForm((v) => !v)}>
               {showInvoiceForm ? 'Cancel' : '+ Add Invoice'}
             </button>
@@ -1025,7 +1064,7 @@ export default function ExpenseDetailPage() {
               ) : (
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   {formatCurrency(inv.finalTotal)}
-                  {canEditFields && (
+                  {canUploadFiles && (
                     <button
                       className="btn"
                       onClick={() => {
@@ -1047,7 +1086,7 @@ export default function ExpenseDetailPage() {
                 ))}
               </div>
             )}
-            {canEditFields && (
+            {canUploadFiles && (
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp,application/pdf"
@@ -1065,7 +1104,7 @@ export default function ExpenseDetailPage() {
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Foto Kegiatan</h3>
-        {canEditFields && (
+        {canUploadFiles && (
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp"
@@ -1084,41 +1123,61 @@ export default function ExpenseDetailPage() {
 
       {approval && (
         <div className="card">
-          <h3>Approval Trail</h3>
-          <div style={{ marginBottom: 8 }}>
-            Status: <span className="badge">{approval.status}</span> · Chain:{' '}
+          <h3 style={{ marginTop: 0 }}>Approval Trail</h3>
+          <div>
+            Status: <span className="badge">{approval.status}</span>
+          </div>
+          <div className="trail-chain">
             {[...approval.steps]
               .sort((a, b) => a.stepOrder - b.stepOrder)
-              .map((s) => `${s.position.name} (${s.resolvedApprover?.name})`)
-              .join(' → ')}
+              .map((s) => {
+                const state =
+                  s.status === 'REJECTED'
+                    ? 'rejected'
+                    : s.status === 'APPROVED'
+                    ? 'done'
+                    : s.stepOrder === approval.currentStep && approval.status === 'PENDING'
+                    ? 'current'
+                    : '';
+                return (
+                  <span key={s.stepOrder} className={`trail-step ${state}`}>
+                    <span className="trail-step-num">{state === 'done' ? '✓' : state === 'rejected' ? '✕' : s.stepOrder + 1}</span>
+                    <span>
+                      {s.position.name}
+                      <small>{s.resolvedApprover?.name}</small>
+                    </span>
+                  </span>
+                );
+              })}
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Position</th>
-                <th>Action</th>
-                <th>Actor</th>
-                <th>Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {approval.actions.map((a) => (
-                <tr key={a.id}>
-                  <td>{formatDateTime(a.actedAt)}</td>
-                  <td>{a.position?.name}</td>
-                  <td>{a.action}</td>
-                  <td>{a.actor?.name}</td>
-                  <td>{a.reason || '-'}</td>
-                </tr>
-              ))}
-              {approval.actions.length === 0 && (
-                <tr>
-                  <td colSpan={5} style={{ color: 'var(--muted)' }}>No actions yet</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          {approval.actions.length === 0 ? (
+            <div style={{ color: 'var(--muted)' }}>No actions yet</div>
+          ) : (
+            <ol className="trail-list">
+              {approval.actions.map((a) => {
+                const rejected = a.action === 'REJECT';
+                const tone = rejected ? 'var(--danger)' : a.action === 'APPROVE' ? 'var(--success)' : 'var(--primary)';
+                return (
+                  <li key={a.id} className="trail-item">
+                    <span className="trail-dot" style={{ ['--tone' as string]: tone }}>
+                      {rejected ? '✕' : a.action === 'APPROVE' ? '✓' : '•'}
+                    </span>
+                    <div className="trail-head">
+                      <strong>{a.action}</strong>
+                      {a.position?.name && <span className="badge">{a.position.name}</span>}
+                      <span className="trail-when">{formatDateTime(a.actedAt)}</span>
+                    </div>
+                    <div className="trail-who">by {a.actor?.name}</div>
+                    {a.reason && (
+                      <div className="trail-reason" style={{ ['--tone' as string]: tone }}>
+                        {a.reason}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
         </div>
       )}
 

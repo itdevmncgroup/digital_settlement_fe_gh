@@ -25,7 +25,7 @@ interface Brand {
 // never shared) - so creating a Brand requires picking its Advertiser.
 export default function BrandsPage() {
   const { hasRole } = useAuth();
-  const canManage = hasRole('ADMIN');
+  const canManage = hasRole('ADMINISTRATOR');
 
   const [brands, setBrands] = useState<Brand[]>([]);
   const [advertisers, setAdvertisers] = useState<AdvertiserOption[]>([]);

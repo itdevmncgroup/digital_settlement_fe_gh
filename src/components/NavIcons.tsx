@@ -132,6 +132,38 @@ const ICONS: Record<string, ReactNode> = {
     </>
   ),
   logo: <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />,
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="12 7 12 12 15.5 14" />
+    </>
+  ),
+  'check-circle': (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="8 12.5 11 15.5 16.5 9" />
+    </>
+  ),
+  layers: (
+    <>
+      <polygon points="12 3 3 8 12 13 21 8 12 3" />
+      <polyline points="3 12.5 12 17.5 21 12.5" />
+      <polyline points="3 17 12 22 21 17" />
+    </>
+  ),
+  alert: (
+    <>
+      <path d="M12 3 2.5 20h19z" />
+      <line x1="12" y1="10" x2="12" y2="14" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </>
+  ),
+  plus: (
+    <>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </>
+  ),
   sun: (
     <>
       <circle cx="12" cy="12" r="4.5" />

@@ -1,8 +1,16 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { AuthProvider } from '@/lib/auth';
 import { AutoMatchProvider } from '@/lib/autoMatch';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
+import { ToastProvider } from '@/components/ToastProvider';
+import { ConfirmProvider } from '@/components/ConfirmDialog';
+import { PromptProvider } from '@/components/PromptDialog';
+import FormValidationGuard from '@/components/FormValidationGuard';
 import './globals.css';
+import './mobile.css';
+import './actions.css';
+
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 
 export const metadata: Metadata = {
   title: 'Digital Settlement',
@@ -17,9 +25,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
       <body>
-        <AuthProvider>
-          <AutoMatchProvider>{children}</AutoMatchProvider>
-        </AuthProvider>
+        <ToastProvider>
+          <ConfirmProvider>
+            <PromptProvider>
+              <FormValidationGuard />
+              <AuthProvider>
+                <AutoMatchProvider>{children}</AutoMatchProvider>
+              </AuthProvider>
+            </PromptProvider>
+          </ConfirmProvider>
+        </ToastProvider>
       </body>
     </html>
   );

@@ -25,7 +25,7 @@ type Row = Record<string, any>;
 
 export default function MasterCrudPage({ title, apiPath, fields, columns }: Props) {
   const { hasRole } = useAuth();
-  const canManage = hasRole('ADMIN');
+  const canManage = hasRole('ADMINISTRATOR');
 
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);

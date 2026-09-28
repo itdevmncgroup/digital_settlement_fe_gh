@@ -1,0 +1,206 @@
+/* ---------- Approve / Reject action buttons ---------- */
+
+.btn-approve,
+.btn-reject {
+  position: relative;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  transition: transform 0.08s ease, box-shadow 0.15s ease, background 0.15s ease, color 0.15s ease, filter 0.15s ease;
+}
+
+.btn-approve::before,
+.btn-reject::before {
+  content: '';
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: var(--btn-icon) center / contain no-repeat;
+  mask: var(--btn-icon) center / contain no-repeat;
+}
+
+.btn-approve {
+  --btn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='4 12.5 9.5 18 20 6.5'/%3E%3C/svg%3E");
+  color: #fff;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, #16a34a 0%, #22c55e 55%, #4ade80 100%);
+  box-shadow: 0 6px 16px color-mix(in srgb, #16a34a 38%, transparent);
+}
+
+.btn-approve:hover {
+  background: linear-gradient(135deg, #15803d 0%, #16a34a 55%, #22c55e 100%);
+  border-color: transparent;
+  box-shadow: 0 8px 22px color-mix(in srgb, #16a34a 50%, transparent);
+  transform: translateY(-1px);
+}
+
+.btn-reject {
+  --btn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round'%3E%3Cline x1='6' y1='6' x2='18' y2='18'/%3E%3Cline x1='18' y1='6' x2='6' y2='18'/%3E%3C/svg%3E");
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.btn-reject:hover {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--danger) 45%, transparent);
+  transform: translateY(-1px);
+}
+
+.btn-approve:active,
+.btn-reject:active {
+  transform: scale(0.97);
+}
+
+.btn-approve:disabled,
+.btn-reject:disabled {
+  transform: none;
+  box-shadow: none;
+}
+
+/* ---------- Approval trail (timeline; replaces the old table) ---------- */
+
+.trail-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 16px;
+}
+
+.trail-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.trail-step-num {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--border);
+}
+
+.trail-step.done {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.trail-step.done .trail-step-num {
+  color: #fff;
+  background: var(--success);
+}
+
+.trail-step.current {
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+.trail-step.current .trail-step-num {
+  color: #1a1200;
+  background: var(--warning);
+}
+
+.trail-step.rejected {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.trail-step.rejected .trail-step-num {
+  color: #fff;
+  background: var(--danger);
+}
+
+.trail-step small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.trail-list {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 28px;
+}
+
+.trail-list::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--border);
+}
+
+.trail-item {
+  position: relative;
+  padding: 0 0 16px;
+}
+
+.trail-item:last-child {
+  padding-bottom: 0;
+}
+
+.trail-dot {
+  position: absolute;
+  left: -28px;
+  top: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  background: var(--tone, var(--primary));
+  box-shadow: 0 0 0 4px var(--surface);
+}
+
+.trail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.trail-when {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.trail-who {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.trail-reason {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border-left: 3px solid var(--tone, var(--border));
+  background: var(--surface-2);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}

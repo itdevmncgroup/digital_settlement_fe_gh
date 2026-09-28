@@ -107,7 +107,7 @@ export default function RolesPage() {
         </button>
       </div>
       <p style={{ color: 'var(--muted)', marginTop: -8, fontSize: 12 }}>
-        SALES/SUPERVISOR/FINANCE/ADMIN/MANAGEMENT are the app&apos;s built-in roles - screens and actions are protected based on
+        SALES/ADMINISTRATOR/MANAGEMENT are the app&apos;s built-in roles - screens and actions are protected based on
         them. A custom role created here can be assigned to users but won&apos;t unlock anything extra on its own; it needs a
         developer to wire a check for it somewhere.
       </p>

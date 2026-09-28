@@ -25,7 +25,7 @@ interface Advertiser {
 // Brand page (each Brand picks its owning Advertiser there), not here.
 export default function AdvertisersPage() {
   const { hasRole } = useAuth();
-  const canManage = hasRole('ADMIN');
+  const canManage = hasRole('ADMINISTRATOR');
 
   const [advertisers, setAdvertisers] = useState<Advertiser[]>([]);
   const [agencies, setAgencies] = useState<AgencyOption[]>([]);

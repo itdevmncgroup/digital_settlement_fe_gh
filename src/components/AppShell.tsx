@@ -8,13 +8,23 @@ import { useAutoMatch } from '@/lib/autoMatch';
 import { useIdleLogout } from '@/lib/useIdleLogout';
 import { getTheme, toggleTheme, Theme } from '@/lib/theme';
 import { NavIcon } from './NavIcons';
+import SplashLoader from './SplashLoader';
+import { positionMatches } from '@/lib/position';
+import { resolveViewMode, ViewMode, VIEW_STORAGE_KEY } from '@/lib/viewMode';
 
 interface NavItem {
   href: string;
   label: string;
+  // Shorter text for the bottom tab bar (falls back to label).
+  tabLabel?: string;
   icon: string;
   roles: string[];
   permissions?: string[];
+  // When set, only users whose Position.code is listed see the item.
+  positions?: string[];
+  // Position codes that never see the item (e.g. the generic dashboard for Head POD / CO-CSO, who have their own).
+  hidePositions?: string[];
+  hideRoles?: string[];
 }
 
 interface NavGroup {
@@ -22,7 +32,67 @@ interface NavGroup {
   items: NavItem[];
 }
 
+// Phone-friendly pages under /m. Shown as a sidebar group for everyone allowed,
+// and as the bottom tab bar in Mobile View.
+const MOBILE_NAV: NavItem[] = [
+  {
+    href: '/m/dashboard',
+    label: 'Dashboard',
+    icon: 'dashboard',
+    roles: [],
+    hidePositions: ['HEAD_POD', 'CO-CSO'],
+    hideRoles: ['MANAGEMENT'],
+  },
+  {
+    href: '/m/dashboard-head-dept',
+    label: 'Dashboard Head Dept',
+    tabLabel: 'Dashboard',
+    icon: 'dashboard',
+    roles: [],
+    positions: ['HEAD_POD'],
+  },
+  {
+    href: '/m/dashboard-co-cso',
+    label: 'Dashboard CO-CSO',
+    tabLabel: 'Dashboard',
+    icon: 'dashboard',
+    roles: [],
+    positions: ['CO-CSO'],
+  },
+  {
+    href: '/m/dashboard-management',
+    label: 'Dashboard Management',
+    tabLabel: 'Dashboard',
+    icon: 'dashboard',
+    roles: ['MANAGEMENT'],
+  },
+  {
+    href: '/m/expense/new',
+    label: 'New Expense',
+    icon: 'plus',
+    roles: ['SALES'],
+    permissions: ['expense.create.all', 'expense.create.owndept'],
+  },
+  { href: '/m/expenses', label: 'Expenses', icon: 'expenses', roles: [], hideRoles: ['MANAGEMENT'] },
+  {
+    href: '/m/settlement',
+    label: 'Settlement',
+    icon: 'settlement',
+    roles: ['ADMINISTRATOR'],
+    permissions: ['settlement.read.owndept', 'settlement.read.all'],
+  },
+  {
+    href: '/m/approvals',
+    label: 'Approval',
+    icon: 'approval',
+    roles: ['ADMINISTRATOR', 'MANAGEMENT'],
+    permissions: ['expense.approve.all', 'expense.approve.owndept'],
+  },
+  { href: '/m/profile', label: 'Profile', icon: 'user', roles: [] },
+];
+
 const NAV: NavGroup[] = [
+  { section: 'Web Mobile', items: MOBILE_NAV },
   {
     section: 'Dashboard',
     items: [
@@ -30,21 +100,21 @@ const NAV: NavGroup[] = [
         href: '/dashboard/executive',
         label: 'Executive Dashboard',
         icon: 'dashboard',
-        roles: ['ADMIN', 'FINANCE', 'MANAGEMENT'],
+        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
         permissions: ['dashboard.read.all', 'dashboard.read.owndept'],
       },
       {
         href: '/expense-dashboard',
         label: 'Expense Dashboard',
         icon: 'dashboard',
-        roles: ['ADMIN', 'FINANCE', 'MANAGEMENT'],
+        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
         permissions: ['dashboard.read.all', 'dashboard.read.owndept'],
       },
       {
         href: '/dashboard/settlement',
         label: 'Settlement Dashboard',
         icon: 'dashboard',
-        roles: ['ADMIN', 'FINANCE', 'MANAGEMENT'],
+        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
         permissions: ['dashboard.read.all', 'dashboard.read.owndept'],
       },
     ],
@@ -56,15 +126,15 @@ const NAV: NavGroup[] = [
         href: '/dashboard/expense-analytics',
         label: 'Expense Analytics',
         icon: 'dashboard',
-        roles: ['ADMIN', 'FINANCE', 'MANAGEMENT'],
+        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
         permissions: ['dashboard.read.all', 'dashboard.read.owndept'],
       },
-      { href: '/audit-logs', label: 'Audit Log', icon: 'audit-log', roles: ['ADMIN', 'FINANCE'] },
+      { href: '/audit-logs', label: 'Audit Log', icon: 'audit-log', roles: ['ADMINISTRATOR'] },
       {
         href: '/dashboard/audit-report',
         label: 'Audit Report',
         icon: 'audit-log',
-        roles: ['ADMIN', 'FINANCE', 'MANAGEMENT'],
+        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
         permissions: ['audit-report.read.all', 'audit-report.read.owndept'],
       },
     ],
@@ -77,14 +147,14 @@ const NAV: NavGroup[] = [
         href: '/approvals',
         label: 'Approval',
         icon: 'approval',
-        roles: ['SUPERVISOR', 'MANAGEMENT', 'FINANCE'],
+        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
         permissions: ['expense.approve.all', 'expense.approve.owndept'],
       },
       {
         href: '/settlement',
         label: 'Settlement',
         icon: 'settlement',
-        roles: ['ADMIN', 'FINANCE'],
+        roles: ['ADMINISTRATOR'],
         permissions: ['settlement.create.owndept', 'settlement.read.owndept', 'settlement.read.all'],
       },
     ],
@@ -92,28 +162,28 @@ const NAV: NavGroup[] = [
   {
     section: 'Master',
     items: [
-      { href: '/master/units', label: 'Unit', icon: 'unit', roles: ['ADMIN'] },
-      { href: '/master/departments', label: 'Department', icon: 'department', roles: ['ADMIN'] },
-      { href: '/master/positions', label: 'Position', icon: 'position', roles: ['ADMIN'] },
-      { href: '/master/agencies', label: 'Agency', icon: 'agency', roles: ['ADMIN'] },
-      { href: '/master/advertisers', label: 'Advertiser', icon: 'advertiser', roles: ['ADMIN'] },
-      { href: '/master/brands', label: 'Brand', icon: 'brand', roles: ['ADMIN'] },
-      { href: '/master/activity-types', label: 'Activity Type', icon: 'activity-type', roles: ['ADMIN'] },
-      { href: '/master/credit-cards', label: 'Corporate Card', icon: 'credit-card', roles: ['ADMIN'] },
-      { href: '/master/payment-methods', label: 'Payment Method', icon: 'payment-method', roles: ['ADMIN'] },
-      { href: '/master/roles', label: 'Role', icon: 'role', roles: ['ADMIN'] },
-      { href: '/master/permissions', label: 'Permission', icon: 'permission', roles: ['ADMIN'] },
+      { href: '/master/units', label: 'Unit', icon: 'unit', roles: ['ADMINISTRATOR'] },
+      { href: '/master/departments', label: 'Department', icon: 'department', roles: ['ADMINISTRATOR'] },
+      { href: '/master/positions', label: 'Position', icon: 'position', roles: ['ADMINISTRATOR'] },
+      { href: '/master/agencies', label: 'Agency', icon: 'agency', roles: ['ADMINISTRATOR'] },
+      { href: '/master/advertisers', label: 'Advertiser', icon: 'advertiser', roles: ['ADMINISTRATOR'] },
+      { href: '/master/brands', label: 'Brand', icon: 'brand', roles: ['ADMINISTRATOR'] },
+      { href: '/master/activity-types', label: 'Activity Type', icon: 'activity-type', roles: ['ADMINISTRATOR'] },
+      { href: '/master/credit-cards', label: 'Corporate Card', icon: 'credit-card', roles: ['ADMINISTRATOR'] },
+      { href: '/master/payment-methods', label: 'Payment Method', icon: 'payment-method', roles: ['ADMINISTRATOR'] },
+      { href: '/master/roles', label: 'Role', icon: 'role', roles: ['ADMINISTRATOR'] },
+      { href: '/master/permissions', label: 'Permission', icon: 'permission', roles: ['ADMINISTRATOR'] },
     ],
   },
   {
     section: 'Import',
-    items: [{ href: '/import', label: 'Excel/CSV/PDF', icon: 'import', roles: ['ADMIN', 'FINANCE'] }],
+    items: [{ href: '/import', label: 'Excel/CSV/PDF', icon: 'import', roles: ['ADMINISTRATOR'] }],
   },
   {
     section: 'System',
     items: [
-      { href: '/users', label: 'User', icon: 'user', roles: ['ADMIN'] },
-      { href: '/approval-levels', label: 'Approval Level', icon: 'approval-level', roles: ['ADMIN'] },
+      { href: '/users', label: 'User', icon: 'user', roles: ['ADMINISTRATOR'] },
+      { href: '/approval-levels', label: 'Approval Level', icon: 'approval-level', roles: ['ADMINISTRATOR'] },
     ],
   },
 ];
@@ -137,6 +207,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>('light');
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [viewMode, setViewModeState] = useState<ViewMode | null>(null);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -145,6 +216,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     setThemeState(getTheme());
     setCollapsed(localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1');
+    setViewModeState(resolveViewMode());
   }, []);
 
   useEffect(() => {
@@ -152,6 +224,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [loading, user, router]);
 
   useIdleLogout(!!user, logout);
+
+  const setViewMode = (mode: ViewMode) => {
+    localStorage.setItem(VIEW_STORAGE_KEY, mode);
+    setViewModeState(mode);
+  };
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
@@ -161,8 +238,62 @@ export default function AppShell({ children }: { children: ReactNode }) {
     });
   };
 
-  if (loading) return <div className="content">Loading...</div>;
+  if (loading) return <SplashLoader message="Loading" />;
   if (!user) return null;
+
+  const isVisible = (item: NavItem) =>
+    item.hidePositions?.some((c) => positionMatches(user.position?.code, c)) || (item.hideRoles && hasRole(...item.hideRoles))
+      ? false
+      : item.positions
+      ? item.positions.some((c) => positionMatches(user.position?.code, c))
+      : (item.roles.length === 0 && !item.permissions) || hasRole(...item.roles) || hasPermission(...(item.permissions ?? []));
+
+  // Sales is always the phone layout (bottom tab bar, no sidebar). Everyone else
+  // picks Mobile or Desktop View; the default follows the device they opened it on.
+  const canChooseView = !hasRole('SALES');
+  if (canChooseView && !viewMode) return <SplashLoader message="Preparing your workspace" />;
+  const bottomNav = !canChooseView || viewMode === 'mobile';
+  const tabs = MOBILE_NAV.filter(isVisible);
+
+  if (bottomNav) {
+    return (
+      <div className="mobile-shell">
+        <header className="mobile-topbar">
+          <div className="mobile-brand">
+            <span className="mobile-brand-mark"><NavIcon name="logo" /></span>
+            <div className="mobile-brand-text">
+              <strong>{user.name}</strong>
+              <span>{user.position?.name ?? user.roles.join(', ')}</span>
+            </div>
+          </div>
+          <div className="mobile-actions">
+            {canChooseView && (
+              <button className="pill-btn" onClick={() => setViewMode('desktop')}>
+                Desktop
+              </button>
+            )}
+            <button
+              className="pill-btn"
+              onClick={() => setThemeState(toggleTheme())}
+              aria-label="Toggle theme"
+              title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            >
+              <NavIcon name={theme === 'dark' ? 'moon' : 'sun'} />
+            </button>
+          </div>
+        </header>
+        <main className="mobile-content">{children}</main>
+        <nav className="bottom-nav" aria-label="Main">
+          {tabs.map((item) => (
+            <Link key={item.href} href={item.href} className={item.href === activeHref ? 'active' : ''}>
+              <span className="nav-icon"><NavIcon name={item.icon} /></span>
+              <span className="nav-label">{item.tabLabel ?? item.label}</span>
+            </Link>
+          ))}
+        </nav>
+      </div>
+    );
+  }
 
   // Desktop's collapsed (icon-only) preference shouldn't also hide labels
   // inside the mobile off-canvas panel, which is always shown full-width.
@@ -191,10 +322,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </div>
         <nav>
           {NAV.map((group) => {
-            const visibleItems = group.items.filter(
-              (item) =>
-                item.roles.length === 0 || hasRole(...item.roles) || hasPermission(...(item.permissions ?? [])),
-            );
+            const visibleItems = group.items.filter(isVisible);
             if (visibleItems.length === 0) return null;
             return (
               <div key={group.section}>
@@ -241,6 +369,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <NavIcon name={theme === 'dark' ? 'moon' : 'sun'} />
               <span>{theme === 'dark' ? 'Dark' : 'Light'}</span>
             </button>
+            {canChooseView && (
+              <button className="btn" onClick={() => setViewMode('mobile')}>
+                Mobile View
+              </button>
+            )}
             <button className="btn" onClick={logout}>
               Logout
             </button>
@@ -266,14 +399,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {progress.fileName}
           </div>
-          <div style={{ background: 'var(--border)', height: 6, borderRadius: 3, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--border)', height: 6, borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
+            {/* One file's parse/OCR can take a while with no sub-progress to
+                report, so a static width-per-file bar sits motionless for most
+                of a run and reads as stuck - this sweeps continuously instead,
+                signalling "still working" rather than a literal percent. */}
             <div
               style={{
-                width: `${(progress.current / progress.total) * 100}%`,
+                width: '40%',
                 height: 6,
                 background: 'var(--primary, #4f7cff)',
                 borderRadius: 3,
-                transition: 'width .3s',
+                animation: 'progress-indeterminate 1.1s ease-in-out infinite',
               }}
             />
           </div>

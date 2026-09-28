@@ -11,10 +11,11 @@ interface CreditCard {
   id: string;
   bank: string;
   last4: string;
-  cardHolderName: string;
   isActive: boolean;
   departmentId: string | null;
   department: { id: string; name: string } | null;
+  userId: string | null;
+  user: { id: string; name: string } | null;
 }
 
 interface DepartmentOption {
@@ -22,24 +23,31 @@ interface DepartmentOption {
   name: string;
 }
 
+interface UserOption {
+  id: string;
+  name: string;
+}
+
 export default function CreditCardsPage() {
   const { hasRole } = useAuth();
-  const canManage = hasRole('ADMIN');
+  const canManage = hasRole('ADMINISTRATOR');
 
   const [cards, setCards] = useState<CreditCard[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
+  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ bank: '', last4: '', cardHolderName: '', isActive: true, departmentId: '' });
+  const [form, setForm] = useState({ bank: '', last4: '', userId: '', isActive: true, departmentId: '' });
+  const [editingUserLabel, setEditingUserLabel] = useState('');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
 
   const filteredCards = cards.filter((c) => {
     if (!search) return true;
     const q = search.toLowerCase();
-    return [c.bank, c.last4, c.cardHolderName, c.department?.name].some((v) => v?.toLowerCase().includes(q));
+    return [c.bank, c.last4, c.user?.name, c.department?.name].some((v) => v?.toLowerCase().includes(q));
   });
   const pagination = usePagination(filteredCards);
 
@@ -52,15 +60,28 @@ export default function CreditCardsPage() {
     api.get<DepartmentOption[]>('/departments?active=true').then(setDepartmentOptions).catch(() => undefined);
   }, []);
 
+  useEffect(() => {
+    if (!form.departmentId) {
+      setUserOptions([]);
+      return;
+    }
+    api
+      .get<UserOption[]>(`/users?departmentId=${form.departmentId}`)
+      .then(setUserOptions)
+      .catch(() => setUserOptions([]));
+  }, [form.departmentId]);
+
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
-    setForm({ bank: '', last4: '', cardHolderName: '', isActive: true, departmentId: '' });
+    setForm({ bank: '', last4: '', userId: '', isActive: true, departmentId: '' });
+    setEditingUserLabel('');
   };
 
   const startEdit = (c: CreditCard) => {
     setEditingId(c.id);
-    setForm({ bank: c.bank, last4: c.last4, cardHolderName: c.cardHolderName, isActive: c.isActive, departmentId: c.departmentId ?? '' });
+    setForm({ bank: c.bank, last4: c.last4, userId: c.userId ?? '', isActive: c.isActive, departmentId: c.departmentId ?? '' });
+    setEditingUserLabel(c.user?.name ?? '');
     setShowForm(true);
   };
 
@@ -69,7 +90,7 @@ export default function CreditCardsPage() {
     setSaving(true);
     setError('');
     try {
-      const payload = { ...form, departmentId: form.departmentId || null };
+      const payload = { ...form, departmentId: form.departmentId || null, userId: form.userId || null };
       if (editingId) {
         await api.patch(`/credit-cards/${editingId}`, payload);
       } else {
@@ -116,18 +137,39 @@ export default function CreditCardsPage() {
               <input required maxLength={4} value={form.last4} onChange={(e) => setForm({ ...form, last4: e.target.value })} />
             </div>
             <div className="form-row">
-              <label>Card Holder Name</label>
-              <input required value={form.cardHolderName} onChange={(e) => setForm({ ...form, cardHolderName: e.target.value })} />
-            </div>
-            <div className="form-row">
               <label>Department (1 Department = 1 card)</label>
-              <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
+              <select
+                value={form.departmentId}
+                onChange={(e) => {
+                  setForm({ ...form, departmentId: e.target.value, userId: '' });
+                  setEditingUserLabel('');
+                }}
+              >
                 <option value="">— Unassigned —</option>
                 {departmentOptions.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
                   </option>
                 ))}
+              </select>
+            </div>
+            <div className="form-row">
+              <label>Card Holder Name</label>
+              <select
+                required
+                disabled={!form.departmentId}
+                value={form.userId}
+                onChange={(e) => setForm({ ...form, userId: e.target.value })}
+              >
+                <option value="">{form.departmentId ? '— Select user —' : 'Select department first'}</option>
+                {userOptions.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
+                ))}
+                {form.userId && !userOptions.some((u) => u.id === form.userId) && (
+                  <option value={form.userId}>{editingUserLabel || form.userId}</option>
+                )}
               </select>
             </div>
             <div className="form-row">
@@ -162,7 +204,7 @@ export default function CreditCardsPage() {
               <tr key={c.id}>
                 <td>{c.bank}</td>
                 <td>{c.last4}</td>
-                <td>{c.cardHolderName}</td>
+                <td>{c.user?.name ?? '-'}</td>
                 <td>{c.department?.name ?? '-'}</td>
                 <td>{c.isActive ? 'Yes' : 'No'}</td>
                 {canManage && (

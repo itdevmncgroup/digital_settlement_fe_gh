@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import DatePicker from '@/components/DatePicker';
 import DepartmentExpenseChart from '@/components/DepartmentExpenseChart';
 import TransactionTrendChart from '@/components/TransactionTrendChart';
@@ -130,6 +131,9 @@ function SettlementStatusBadge({ status }: { status: string }) {
 }
 
 export default function SettlementDashboardPage() {
+  const { hasRole, hasPermission } = useAuth();
+  const canViewAllDepartments = hasRole('ADMINISTRATOR') || hasPermission('dashboard.read.all');
+
   const [draftFrom, setDraftFrom] = useState('');
   const [draftTo, setDraftTo] = useState('');
   const [draftDepartmentId, setDraftDepartmentId] = useState('');
@@ -153,9 +157,11 @@ export default function SettlementDashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get<DepartmentOption[]>('/departments?active=true').then(setDepartmentOptions).catch(() => undefined);
+    const path = canViewAllDepartments ? '/departments?active=true' : '/departments/me';
+    api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     api.get<UserOption[]>('/users').then(setUserOptions).catch(() => undefined);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canViewAllDepartments]);
 
   useEffect(() => {
     const qs = buildQuery(appliedFilter);
@@ -222,7 +228,7 @@ export default function SettlementDashboardPage() {
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
             POD
             <select value={draftDepartmentId} onChange={(e) => setDraftDepartmentId(e.target.value)} style={{ width: 180 }}>
-              <option value="">All POD</option>
+              <option value="">{canViewAllDepartments ? 'All POD' : 'All my POD'}</option>
               {departmentOptions.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.name}

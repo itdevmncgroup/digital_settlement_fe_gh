@@ -92,6 +92,12 @@ Server Components patterns apply beyond the root layout.
 - `.env.local.example` → `NEXT_PUBLIC_API_URL` (default `http://localhost:3000/api/v1`),
   `NEXT_PUBLIC_SESSION_TIMEOUT` (idle timeout in minutes; `0` disables auto-logout -
   see `useIdleLogout` in `src/lib/useIdleLogout.ts`, wired up in `AppShell.tsx`).
+  `NEXT_PUBLIC_*` is inlined at build time — restart `npm run dev` after changing it.
+- Idle timeout is the *only* intended auto-logout. `src/lib/api.ts` spends the stored
+  refresh token on a 401 (one-shot, single-flight, then retries the request) so the
+  backend's short `JWT_ACCESS_EXPIRES_IN` never ends a session on its own — only a failed
+  refresh clears storage and redirects. Keep any new fetch helper on `authedFetch` rather
+  than calling `fetch` with a bearer token directly, or it will resurrect that bug.
 - Mirrors the backend's endpoint shapes and error format 1:1 — check
   `digital_settlement_be`'s controller/DTO before inventing a new request/response shape.
 

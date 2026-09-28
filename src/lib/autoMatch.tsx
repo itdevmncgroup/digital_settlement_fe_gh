@@ -33,7 +33,7 @@ interface AutoMatchContextValue {
   batches: ScannedBatch[];
   /** Bumps once per file as its match result lands - subscribe to it to refresh a table live. */
   version: number;
-  start: (files: File[], forceRescan: boolean) => void;
+  start: (files: File[], forceRescan: boolean, departmentId: string, creditCardId: string) => void;
 }
 
 const AutoMatchContext = createContext<AutoMatchContextValue | undefined>(undefined);
@@ -52,7 +52,7 @@ export function AutoMatchProvider({ children }: { children: ReactNode }) {
   // Runs detached from whichever component called start() - lives on the
   // provider mounted at the root layout, so it keeps going across in-app page
   // navigation (the provider tree is never unmounted, only its children swap).
-  const start = (files: File[], forceRescan: boolean) => {
+  const start = (files: File[], forceRescan: boolean, departmentId: string, creditCardId: string) => {
     if (runningRef.current || files.length === 0) return;
     runningRef.current = true;
     setRunning(true);
@@ -67,7 +67,9 @@ export function AutoMatchProvider({ children }: { children: ReactNode }) {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           setProgress({ current: i, total: files.length, fileName: file.name });
-          const batch = (await uploadFile('/bank-settlements', file, forceRescan ? '?force=true' : '')) as ScannedBatch;
+          const fields: Record<string, string> = { departmentId };
+          if (creditCardId) fields.creditCardId = creditCardId;
+          const batch = (await uploadFile('/bank-settlements', file, forceRescan ? '?force=true' : '', fields)) as ScannedBatch;
           results.push(batch);
           setBatches([...results]);
           setVersion((v) => v + 1);
