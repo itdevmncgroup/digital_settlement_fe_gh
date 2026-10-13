@@ -1,7 +1,12 @@
 'use client';
 
-import ApproverDashboardView from '@/components/ApproverDashboardView';
+import DepartmentOdooDashboardView from '@/components/DepartmentOdooDashboardView';
+import WebMobileGate from '@/components/WebMobileGate';
 
 export default function HeadDeptDashboardPage() {
-  return <ApproverDashboardView title="Dashboard Head Dept" endpoint="/dashboard/head-pod" />;
+  return (
+    <WebMobileGate permissions={['webmobile.dashboard.read.own', 'webmobile.dashboard.read.owndept']}>
+      <DepartmentOdooDashboardView title="Dashboard Head Dept" endpoint="/dashboard/head-pod" chartTitle="Top 10 sales by expense" />
+    </WebMobileGate>
+  );
 }

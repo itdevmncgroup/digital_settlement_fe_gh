@@ -26,16 +26,17 @@ export default function LocalFileThumb({ file, onRemove }: LocalFileThumbProps) 
   const thumb = (
     <div
       style={{
-        width: 72,
-        height: 72,
-        borderRadius: 6,
+        width: 80,
+        height: 80,
+        borderRadius: 'var(--radius)',
         border: '1px solid var(--border)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
-        background: 'var(--input-bg)',
-        fontSize: 22,
+        background: 'var(--surface-2)',
+        boxShadow: 'var(--shadow-sm)',
+        fontSize: 24,
       }}
     >
       {isImage && url ? (
@@ -74,7 +75,7 @@ export default function LocalFileThumb({ file, onRemove }: LocalFileThumbProps) 
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: 4,
+            gap: 6,
             width: 84,
             textAlign: 'center',
             cursor: url ? 'pointer' : 'default',
@@ -92,7 +93,7 @@ export default function LocalFileThumb({ file, onRemove }: LocalFileThumbProps) 
           target="_blank"
           rel="noreferrer"
           title={file.name}
-          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, textAlign: 'center' }}
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, textAlign: 'center' }}
         >
           {thumb}
           {label}
@@ -105,18 +106,19 @@ export default function LocalFileThumb({ file, onRemove }: LocalFileThumbProps) 
           aria-label={`Remove ${file.name}`}
           style={{
             position: 'absolute',
-            top: -6,
-            right: -6,
-            width: 20,
-            height: 20,
+            top: -8,
+            right: -8,
+            width: 24,
+            height: 24,
             borderRadius: '50%',
-            border: '1px solid var(--border)',
+            border: '2px solid var(--surface)',
             background: 'var(--danger)',
             color: '#fff',
-            fontSize: 12,
-            lineHeight: '18px',
+            fontSize: 14,
+            lineHeight: '20px',
             padding: 0,
             cursor: 'pointer',
+            boxShadow: 'var(--shadow-sm)',
           }}
         >
           ×

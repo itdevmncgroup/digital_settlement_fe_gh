@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { formatDate } from '@/lib/date';
 
 interface DatePickerProps {
@@ -41,6 +42,8 @@ export default function DatePicker({ value, onChange, required, disabled, style,
   const [viewYear, setViewYear] = useState(parsed?.y ?? today.getFullYear());
   const [viewMonth, setViewMonth] = useState(parsed?.m ?? today.getMonth());
   const rootRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -53,7 +56,8 @@ export default function DatePicker({ value, onChange, required, disabled, style,
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current && !rootRef.current.contains(t) && !popRef.current?.contains(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
@@ -63,6 +67,34 @@ export default function DatePicker({ value, onChange, required, disabled, style,
     return () => {
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  // The calendar is portaled to <body> with fixed coords: inside a Modal (overflow:auto)
+  // an absolutely positioned popover gets clipped. Flips above the field when there's
+  // no room below, and clamps horizontally to the viewport.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const anchor = rootRef.current?.getBoundingClientRect();
+      const pop = popRef.current;
+      if (!anchor || !pop) return;
+      const gap = 4;
+      const margin = 8;
+      const { offsetWidth: w, offsetHeight: h } = pop;
+      let top = anchor.bottom + gap;
+      if (top + h > window.innerHeight - margin && anchor.top - gap - h >= margin) top = anchor.top - gap - h;
+      top = Math.max(margin, Math.min(top, window.innerHeight - h - margin));
+      const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - w - margin));
+      setPopPos({ top, left });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      setPopPos(null);
     };
   }, [open]);
 
@@ -105,9 +137,11 @@ export default function DatePicker({ value, onChange, required, disabled, style,
         {value ? formatDate(value) : placeholder ?? 'dd-mm-yyyy'}
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
+          ref={popRef}
           className="datepicker-pop"
+          style={{ top: popPos?.top ?? 0, left: popPos?.left ?? 0, visibility: popPos ? 'visible' : 'hidden' }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="datepicker-nav">
@@ -179,7 +213,8 @@ export default function DatePicker({ value, onChange, required, disabled, style,
               </button>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

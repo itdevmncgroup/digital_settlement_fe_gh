@@ -15,6 +15,7 @@ interface Option {
 
 interface SalesOption extends Option {
   employeeId: string;
+  positionId: string | null;
   roles: string[];
   departments: Option[];
 }
@@ -141,6 +142,23 @@ export default function DepartmentsPage() {
 
   const pagination = usePagination(departments);
 
+  const onDelete = async (d: DepartmentListItem) => {
+    const ok = await confirm({
+      title: 'Delete Department?',
+      message: `"${d.name}" will be permanently deleted together with its Agency/Brand coverage, approvers, member links and Approval Level scope. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setError('');
+    try {
+      await api.del(`/departments/${d.id}`);
+      if (selectedDepartmentId === d.id) closeEditModal();
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Delete failed');
+    }
+  };
+
   const load = () => {
     const qs = search ? `?search=${encodeURIComponent(search)}` : '';
     api
@@ -231,6 +249,9 @@ export default function DepartmentsPage() {
     setApproverPositionId('');
     setApproverUserId('');
   };
+
+  // User combobox only lists Users holding the chosen Position.
+  const approverUserOptions = approverPositionId ? salesOptions.filter((s) => s.positionId === approverPositionId) : [];
 
   const removeStagedApprover = (positionId: string) =>
     setStagedApprovers((prev) => prev.filter((a) => a.positionId !== positionId));
@@ -358,6 +379,11 @@ export default function DepartmentsPage() {
     setManageApproverPositionId('');
     setManageApproverUserId('');
   }, [selectedDepartmentId]);
+
+  // User combobox only lists Users holding the chosen Position.
+  const manageApproverUserOptions = manageApproverPositionId
+    ? salesOptions.filter((s) => s.positionId === manageApproverPositionId)
+    : [];
 
   // Upserts (backend replaces the User already holding this Position for this
   // Department, since positionId is unique per Department).
@@ -522,7 +548,13 @@ export default function DepartmentsPage() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
               <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
                 <label>Position</label>
-                <select value={approverPositionId} onChange={(e) => setApproverPositionId(e.target.value)}>
+                <select
+                  value={approverPositionId}
+                  onChange={(e) => {
+                    setApproverPositionId(e.target.value);
+                    setApproverUserId('');
+                  }}
+                >
                   <option value="">Select position</option>
                   {positions.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -533,9 +565,9 @@ export default function DepartmentsPage() {
               </div>
               <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
                 <label>Sales (User)</label>
-                <select value={approverUserId} onChange={(e) => setApproverUserId(e.target.value)}>
-                  <option value="">Select user</option>
-                  {salesOptions.map((s) => (
+                <select disabled={!approverPositionId} value={approverUserId} onChange={(e) => setApproverUserId(e.target.value)}>
+                  <option value="">{approverPositionId ? 'Select user' : 'Select position first'}</option>
+                  {approverUserOptions.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} ({s.employeeId})
                     </option>
@@ -618,9 +650,14 @@ export default function DepartmentsPage() {
                     </span>
                   </td>
                   <td>
-                    <button className="btn" onClick={() => editDepartment(d.id)}>
-                      Edit
-                    </button>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="btn" onClick={() => editDepartment(d.id)}>
+                        Edit
+                      </button>
+                      <button className="btn btn-danger" onClick={() => onDelete(d)}>
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -780,7 +817,13 @@ export default function DepartmentsPage() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', margin: '12px 0', flexWrap: 'wrap' }}>
               <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
                 <label>Position</label>
-                <select value={manageApproverPositionId} onChange={(e) => setManageApproverPositionId(e.target.value)}>
+                <select
+                  value={manageApproverPositionId}
+                  onChange={(e) => {
+                    setManageApproverPositionId(e.target.value);
+                    setManageApproverUserId('');
+                  }}
+                >
                   <option value="">Select position</option>
                   {positions.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -791,9 +834,13 @@ export default function DepartmentsPage() {
               </div>
               <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
                 <label>Sales (User)</label>
-                <select value={manageApproverUserId} onChange={(e) => setManageApproverUserId(e.target.value)}>
-                  <option value="">Select user</option>
-                  {salesOptions.map((s) => (
+                <select
+                  disabled={!manageApproverPositionId}
+                  value={manageApproverUserId}
+                  onChange={(e) => setManageApproverUserId(e.target.value)}
+                >
+                  <option value="">{manageApproverPositionId ? 'Select user' : 'Select position first'}</option>
+                  {manageApproverUserOptions.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} ({s.employeeId})
                     </option>

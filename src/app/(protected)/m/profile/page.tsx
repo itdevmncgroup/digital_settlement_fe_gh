@@ -2,9 +2,18 @@
 
 import { FormEvent, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import WebMobileGate from '@/components/WebMobileGate';
 import { useAuth } from '@/lib/auth';
 
 export default function MobileProfilePage() {
+  return (
+    <WebMobileGate permissions={['webmobile.profile.read.own']}>
+      <MobileProfile />
+    </WebMobileGate>
+  );
+}
+
+function MobileProfile() {
   const { user, logout } = useAuth();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');

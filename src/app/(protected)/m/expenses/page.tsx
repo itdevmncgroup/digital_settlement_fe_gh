@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import WebMobileGate from '@/components/WebMobileGate';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/date';
 import { formatCurrency, SkeletonList, StatusBadge, statusTone, TONE_COLOR, toneStyle } from '@/lib/mobileUi';
@@ -15,6 +16,8 @@ interface ExpenseRow {
   amount: string;
   status: string;
   salesId: string;
+  // Set when keyed in on someone else's behalf (the inputter).
+  createdById?: string | null;
   sales: { name: string };
   advertiser: { name: string } | null;
   brand: { name: string } | null;
@@ -36,7 +39,18 @@ const isoDaysAgo = (days: number) => {
 };
 
 export default function MobileExpensesPage() {
-  const { user } = useAuth();
+  return (
+    <WebMobileGate permissions={['webmobile.expense.read.own', 'webmobile.expense.read.owndept']}>
+      <MobileExpensesList />
+    </WebMobileGate>
+  );
+}
+
+function MobileExpensesList() {
+  const { user, hasRole, hasPermission } = useAuth();
+  // webmobile.expense.read.owndept shows every row the API returns (its Department scope is
+  // enforced there); with only .read.own the list narrows to Expenses the user owns or keyed in.
+  const seeDept = hasRole('ADMINISTRATOR') || hasPermission('webmobile.expense.read.owndept');
   const [rows, setRows] = useState<ExpenseRow[] | null>(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -56,7 +70,9 @@ export default function MobileExpensesPage() {
   }, [search, days]);
 
   const statuses = Array.from(new Set((rows ?? []).map((r) => r.status))).sort();
-  const shown = (rows ?? []).filter((r) => !status || r.status === status);
+  const shown = (rows ?? [])
+    .filter((r) => seeDept || r.salesId === user?.id || r.createdById === user?.id)
+    .filter((r) => !status || r.status === status);
   const total = shown.reduce((sum, r) => sum + Number(r.amount), 0);
 
   return (

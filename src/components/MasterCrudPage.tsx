@@ -1,16 +1,21 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, uploadFile } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { useConfirm } from './ConfirmDialog';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from './Pagination';
 import SearchBox from './SearchBox';
+import FileThumb from './FileThumb';
+import LocalFileThumb from './LocalFileThumb';
 
 export interface FieldConfig {
   key: string;
   label: string;
-  type: 'text' | 'checkbox';
+  // 'image': picked as a file and uploaded to POST {apiPath}/{id}/{key} after the row is saved;
+  // shown from GET {apiPath}/{id}/{key} while the row's has<Key> flag (e.g. hasLogo) is true.
+  type: 'text' | 'checkbox' | 'image';
   required?: boolean;
 }
 
@@ -18,13 +23,14 @@ interface Props {
   title: string;
   apiPath: string;
   fields: FieldConfig[];
-  columns: { key: string; label: string }[];
+  columns: { key: string; label: string; type?: 'image' }[];
 }
 
 type Row = Record<string, any>;
 
 export default function MasterCrudPage({ title, apiPath, fields, columns }: Props) {
   const { hasRole } = useAuth();
+  const confirm = useConfirm();
   const canManage = hasRole('ADMINISTRATOR');
 
   const [rows, setRows] = useState<Row[]>([]);
@@ -33,6 +39,7 @@ export default function MasterCrudPage({ title, apiPath, fields, columns }: Prop
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Row>({});
+  const [imageFiles, setImageFiles] = useState<Record<string, File>>({});
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -54,17 +61,20 @@ export default function MasterCrudPage({ title, apiPath, fields, columns }: Prop
     setShowForm(false);
     setEditingId(null);
     setForm({});
+    setImageFiles({});
   };
 
   const startCreate = () => {
     setEditingId(null);
     setForm({});
+    setImageFiles({});
     setShowForm(true);
   };
 
   const startEdit = (row: Row) => {
     setEditingId(row.id);
-    setForm(Object.fromEntries(fields.map((f) => [f.key, row[f.key]])));
+    setForm(Object.fromEntries(fields.filter((f) => f.type !== 'image').map((f) => [f.key, row[f.key]])));
+    setImageFiles({});
     setShowForm(true);
   };
 
@@ -73,10 +83,9 @@ export default function MasterCrudPage({ title, apiPath, fields, columns }: Prop
     setSaving(true);
     setError('');
     try {
-      if (editingId) {
-        await api.patch(`${apiPath}/${editingId}`, form);
-      } else {
-        await api.post(apiPath, form);
+      const saved = editingId ? await api.patch<Row>(`${apiPath}/${editingId}`, form) : await api.post<Row>(apiPath, form);
+      for (const [key, file] of Object.entries(imageFiles)) {
+        await uploadFile(`${apiPath}/${saved.id}/${key}`, file);
       }
       closeForm();
       load();
@@ -84,6 +93,24 @@ export default function MasterCrudPage({ title, apiPath, fields, columns }: Prop
       setError(err instanceof ApiError ? err.message : 'Save failed');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const onDelete = async (row: Row) => {
+    const label = String(row[columns[0].key] ?? '');
+    const ok = await confirm({
+      title: `Delete ${title}?`,
+      message: `${label ? `"${label}" will` : 'This will'} be permanently deleted. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setError('');
+    try {
+      await api.del(`${apiPath}/${row.id}`);
+      if (editingId === row.id) closeForm();
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Delete failed');
     }
   };
 
@@ -121,6 +148,32 @@ export default function MasterCrudPage({ title, apiPath, fields, columns }: Prop
                     checked={!!form[f.key]}
                     onChange={(e) => setForm({ ...form, [f.key]: e.target.checked })}
                   />
+                ) : f.type === 'image' ? (
+                  <div>
+                    <input
+                      id={f.key}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) setImageFiles((prev) => ({ ...prev, [f.key]: file }));
+                        e.target.value = '';
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      {imageFiles[f.key] ? (
+                        <LocalFileThumb
+                          file={imageFiles[f.key]}
+                          onRemove={() => setImageFiles((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== f.key)))}
+                        />
+                      ) : (
+                        editingId &&
+                        rows.find((r) => r.id === editingId)?.[`has${f.key.charAt(0).toUpperCase()}${f.key.slice(1)}`] && (
+                          <FileThumb path={`${apiPath}/${editingId}/${f.key}`} fileName={f.key} isImage />
+                        )
+                      )}
+                    </div>
+                  </div>
                 ) : (
                   <input
                     id={f.key}
@@ -158,13 +211,28 @@ export default function MasterCrudPage({ title, apiPath, fields, columns }: Prop
               {pagination.pageRows.map((row) => (
                 <tr key={row.id}>
                   {columns.map((c) => (
-                    <td key={c.key}>{String(row[c.key] ?? '')}</td>
+                    <td key={c.key}>
+                      {c.type === 'image' ? (
+                        row[`has${c.key.charAt(0).toUpperCase()}${c.key.slice(1)}`] ? (
+                          <FileThumb path={`${apiPath}/${row.id}/${c.key}`} fileName={c.key} isImage />
+                        ) : (
+                          '-'
+                        )
+                      ) : (
+                        String(row[c.key] ?? '')
+                      )}
+                    </td>
                   ))}
                   {canManage && (
                     <td>
-                      <button className="btn" onClick={() => startEdit(row)}>
-                        Edit
-                      </button>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn" onClick={() => startEdit(row)}>
+                          Edit
+                        </button>
+                        <button className="btn btn-danger" onClick={() => onDelete(row)}>
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   )}
                 </tr>

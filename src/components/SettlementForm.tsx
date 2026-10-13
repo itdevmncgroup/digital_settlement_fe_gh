@@ -14,6 +14,11 @@ interface DepartmentOption {
   name: string;
 }
 
+interface ActivityTypeOption {
+  id: string;
+  name: string;
+}
+
 interface UnitOption {
   id: string;
   code: string;
@@ -21,23 +26,37 @@ interface UnitOption {
   revenueSharePercent: string | null;
 }
 
-// One row of the Unit/Persentase/... section below the Expense list -
-// Original Price/Unit Price/Total Price are computed client-side just for
-// display; the server always recomputes them from the picked Expenses'
-// total * percentage (never trusts these back).
+interface CreditCardOption {
+  id: string;
+  bank: string;
+  last4: string;
+  user: { id: string; name: string } | null;
+}
+
+// One row of the Settlement Allocation section below the Expense list - fixed
+// one row per Unit (RCTI/MNCTV/GTV), Unit/Product are readonly. Total is
+// computed client-side just for display; the server always recomputes it from
+// the picked Expenses' total * percentage (never trusts this back).
+// autoDescription tracks the last machine-generated description so edits to
+// Department/dates/card below can keep refreshing it, right up until the user
+// types their own - description !== autoDescription then means "hands off".
 interface AllocationRow {
   key: string;
   unitId: string;
+  unitCode: string;
   percentage: string;
   description: string;
-  analyticAcc: string;
-  account: string;
-  wilayah: string;
-  linePr: string;
+  autoDescription: string;
   qty: string;
   curr: string;
-  rate: string;
 }
+
+// RE101 product code per Unit (BRD mapping) - shown readonly next to the Unit.
+const PRODUCT_BY_UNIT_CODE: Record<string, string> = {
+  RCTI: 'RE101-04.001',
+  MNCTV: 'RE101-05.002',
+  GTV: 'RE101-05.003',
+};
 
 function AllocFieldLabel({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -46,22 +65,6 @@ function AllocFieldLabel({ label, children }: { label: string; children: ReactNo
       {children}
     </div>
   );
-}
-
-function emptyAllocationRow(): AllocationRow {
-  return {
-    key: Math.random().toString(36).slice(2),
-    unitId: '',
-    percentage: '',
-    description: '',
-    analyticAcc: '',
-    account: '',
-    wilayah: '',
-    linePr: '',
-    qty: '1',
-    curr: 'IDR',
-    rate: '1',
-  };
 }
 
 interface GeneratedExpenseRow {
@@ -100,14 +103,9 @@ interface ExistingSettlement {
   allocations: {
     percentage: string;
     description: string | null;
-    analyticAcc: string | null;
-    account: string | null;
-    wilayah: string | null;
-    linePr: string | null;
     qty: string;
     curr: string;
-    rate: string;
-    unit: { id: string };
+    unit: { id: string; code: string };
   }[];
 }
 
@@ -123,12 +121,16 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
   const [loadingExisting, setLoadingExisting] = useState(isEdit);
 
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
+  const [activityTypeOptions, setActivityTypeOptions] = useState<ActivityTypeOption[]>([]);
   const [unitOptions, setUnitOptions] = useState<UnitOption[]>([]);
+  const [creditCardOptions, setCreditCardOptions] = useState<CreditCardOption[]>([]);
 
+  const [genActivityTypeIds, setGenActivityTypeIds] = useState<string[]>([]);
   const [genDepartmentId, setGenDepartmentId] = useState('');
   const [genFromDate, setGenFromDate] = useState(defaultFromDate);
   const [genToDate, setGenToDate] = useState(defaultToDate);
   const [genPaymentMethodGroup, setGenPaymentMethodGroup] = useState<'CORPORATE_CARD' | 'NON_CORPORATE_CARD' | ''>('');
+  const [genCreditCardId, setGenCreditCardId] = useState('');
   const [searching, setSearching] = useState(false);
   const [generateError, setGenerateError] = useState('');
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
@@ -137,15 +139,43 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
   const [creatingSettlement, setCreatingSettlement] = useState(false);
   const [allocationRows, setAllocationRows] = useState<AllocationRow[]>([]);
 
+  // Parcel/Bingkisan Expenses aren't owned by one Department (sent org-wide),
+  // so picking only that Activity Type widens the Department combobox to all
+  // Departments even for a non-ADMINISTRATOR user who'd otherwise only see
+  // their own (/departments/me).
+  const isParcelOnly =
+    genActivityTypeIds.length === 1 && activityTypeOptions.find((a) => a.id === genActivityTypeIds[0])?.name === 'Parcel/Bingkisan';
+
   useEffect(() => {
-    const path = canManage ? '/departments?active=true' : '/departments/me';
+    const path = canManage || isParcelOnly ? '/departments?active=true' : '/departments/me';
     api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canManage]);
+  }, [canManage, isParcelOnly]);
+
+  useEffect(() => {
+    api.get<ActivityTypeOption[]>('/activity-types?active=true').then(setActivityTypeOptions).catch(() => undefined);
+  }, []);
+
+  const toggleActivityType = (id: string) =>
+    setGenActivityTypeIds((prev) => (prev.includes(id) ? prev.filter((a) => a !== id) : [...prev, id]));
 
   useEffect(() => {
     api.get<UnitOption[]>('/units?active=true').then(setUnitOptions).catch(() => undefined);
   }, []);
+
+  // Corporate Card options for the picked Department - a Department can hold more
+  // than one card, so this narrows generate()/createFromSelection() to one of them.
+  useEffect(() => {
+    setGenCreditCardId('');
+    if (!genDepartmentId || genPaymentMethodGroup !== 'CORPORATE_CARD') {
+      setCreditCardOptions([]);
+      return;
+    }
+    api
+      .get<CreditCardOption[]>(`/credit-cards?departmentId=${genDepartmentId}&active=true`)
+      .then(setCreditCardOptions)
+      .catch(() => setCreditCardOptions([]));
+  }, [genDepartmentId, genPaymentMethodGroup]);
 
   // Sum of the Expenses the user has checked in the preview table - what each
   // allocation row's Original/Unit/Total Price is a percentage of. Recomputed
@@ -158,27 +188,85 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
   const updateAllocationRow = (key: string, patch: Partial<AllocationRow>) =>
     setAllocationRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
-  // "Generate Allocation": replaces manual row-adding with 4 preset rows, one
-  // per Unit (RCTI/MNCTV/GTV/INEWS), each prefilled with that Unit's default
-  // Settlement % from Units master data - still freely editable afterwards.
-  const PRESET_UNIT_CODES = ['RCTI', 'MNCTV', 'GTV', 'INEWS'];
+  // One fixed row per Unit - Unit/Product are readonly, so there's nothing to
+  // pick: the 3 rows always exist once an Expense is checked.
+  const PRESET_UNIT_CODES = ['RCTI', 'MNCTV', 'GTV'];
+
+  // Default description template, dates as DD-MMM-YYYY:
+  //   Corporate Card:     "[CREDIT CARD] [****-{last4}] [{DEPT NAME}] [{DATE_FROM} - {DATE_TO}] ({UNIT_NAME} {persentase}%)"
+  //   Non Corporate Card: "[NON CREDIT CARD] [{DEPT NAME}] [{DATE_FROM} - {DATE_TO}] ({UNIT_NAME} {persentase}%)"
+  const buildAllocationDescription = (unitCode: string, percentage: string) => {
+    const deptName = (departmentOptions.find((d) => d.id === genDepartmentId)?.name ?? existing?.department.name ?? '').toUpperCase();
+    const isCard = genPaymentMethodGroup === 'CORPORATE_CARD';
+    const last4 = creditCardOptions.find((c) => c.id === genCreditCardId)?.last4 ?? 'NULL';
+    // YYYY-MM-DD (date input value) -> DD-MMM-YYYY, by string split so no timezone shift.
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const ddMmmYyyy = (d: string) => {
+      const [y, m, day] = d.slice(0, 10).split('-');
+      return y && m && day ? `${day}-${MONTHS[Number(m) - 1] ?? m}-${y}` : '';
+    };
+    const unitName = unitOptions.find((u) => u.code === unitCode)?.name ?? unitCode;
+    const pct = Number(percentage) || 0;
+    const head = isCard ? `[CREDIT CARD] [****-${last4}]` : '[NON CREDIT CARD]';
+    return `${head} [${deptName}] [${ddMmmYyyy(genFromDate)} - ${ddMmmYyyy(genToDate)}] (${unitName} ${pct}%)`;
+  };
+
+  // "Settlement Allocation langsung muncul": one row per Unit, auto-built the
+  // moment the first Expense gets checked (not a manual "Generate" step).
   const generateAllocationRows = () => {
     setAllocationRows(
       PRESET_UNIT_CODES.map((code) => {
         const unit = unitOptions.find((u) => u.code === code);
-        return { ...emptyAllocationRow(), unitId: unit?.id ?? '', percentage: unit?.revenueSharePercent ?? '' };
+        const percentage = unit?.revenueSharePercent ?? '';
+        const description = buildAllocationDescription(code, percentage);
+        return {
+          key: Math.random().toString(36).slice(2),
+          unitId: unit?.id ?? '',
+          unitCode: code,
+          percentage,
+          description,
+          autoDescription: description,
+          qty: '1',
+          curr: 'IDR',
+        };
       }),
     );
   };
 
-  const removeAllocationRow = (key: string) => setAllocationRows((prev) => prev.filter((r) => r.key !== key));
+  useEffect(() => {
+    if (isEdit) return;
+    if (selectedExpenseIds.size === 0) return;
+    if (allocationRows.length > 0) return;
+    if (unitOptions.length === 0) return;
+    generateAllocationRows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedExpenseIds, unitOptions, isEdit]);
 
-  // Picking a Unit prefills that Unit's default Settlement % (Units master data,
-  // e.g. RCTI 48%) - still freely editable afterwards.
-  const selectAllocationUnit = (key: string, unitId: string) => {
-    const unit = unitOptions.find((u) => u.id === unitId);
-    updateAllocationRow(key, { unitId, percentage: unit?.revenueSharePercent ?? '' });
-  };
+  // Keeps each row's description in sync with its template inputs - but only
+  // while the row still holds its last machine-generated text; once the user
+  // types their own description, it's left alone.
+  useEffect(() => {
+    setAllocationRows((prev) =>
+      prev.map((r) => {
+        if (r.description !== r.autoDescription) return r;
+        const nextDescription = buildAllocationDescription(r.unitCode, r.percentage);
+        return { ...r, description: nextDescription, autoDescription: nextDescription };
+      }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [genPaymentMethodGroup, genCreditCardId, genDepartmentId, genFromDate, genToDate, departmentOptions, creditCardOptions]);
+
+  // Percentage edits feed straight back into the description template too
+  // (the "(UNIT %)" tail), as long as the description is still auto-generated.
+  const updateAllocationPercentage = (key: string, percentage: string) =>
+    setAllocationRows((prev) =>
+      prev.map((r) => {
+        if (r.key !== key) return r;
+        if (r.description !== r.autoDescription) return { ...r, percentage };
+        const nextDescription = buildAllocationDescription(r.unitCode, percentage);
+        return { ...r, percentage, description: nextDescription, autoDescription: nextDescription };
+      }),
+    );
 
   const allocationAmount = (row: AllocationRow) => (selectedExpensesTotal * (Number(row.percentage) || 0)) / 100;
 
@@ -191,8 +279,8 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
       .get<ExistingSettlement>(`/settlements/${settlementId}`)
       .then((s) => {
         setExisting(s);
-        if (s.status !== 'DRAFT_SETTLEMENT') {
-          setGenerateError('Only a draft settlement can be edited.');
+        if (s.status !== 'DRAFT_SETTLEMENT' && s.status !== 'REVISION') {
+          setGenerateError('Only a draft or revision-pending settlement can be edited.');
           return;
         }
         const group = s.expenses[0]?.paymentMethod?.code === 'CORPORATE_CARD' ? 'CORPORATE_CARD' : 'NON_CORPORATE_CARD';
@@ -208,15 +296,14 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
           s.allocations.map((a) => ({
             key: Math.random().toString(36).slice(2),
             unitId: a.unit.id,
+            unitCode: a.unit.code,
             percentage: String(Number(a.percentage)),
             description: a.description ?? '',
-            analyticAcc: a.analyticAcc ?? '',
-            account: a.account ?? '',
-            wilayah: a.wilayah ?? '',
-            linePr: a.linePr ?? '',
+            // Sentinel that can never equal the saved description, so the
+            // auto-refresh effect never silently overwrites an existing row.
+            autoDescription: '\0',
             qty: String(Number(a.qty)),
             curr: a.curr,
-            rate: String(Number(a.rate)),
           })),
         );
         return runSearch(s, s.department.id, from, to, group);
@@ -241,12 +328,21 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
     fromDate: string,
     toDate: string,
     paymentMethodGroup: 'CORPORATE_CARD' | 'NON_CORPORATE_CARD',
+    creditCardId?: string,
+    activityTypeIds?: string[],
   ) => {
     setSearching(true);
     setGenerateError('');
     setShowDuplicateConfirm(false);
     try {
-      const result = await api.post<PreviewResult>('/settlements/generate', { departmentId, fromDate, toDate, paymentMethodGroup });
+      const result = await api.post<PreviewResult>('/settlements/generate', {
+        departmentId,
+        fromDate,
+        toDate,
+        paymentMethodGroup,
+        creditCardId: paymentMethodGroup === 'CORPORATE_CARD' ? creditCardId || undefined : undefined,
+        activityTypeIds: activityTypeIds && activityTypeIds.length > 0 ? activityTypeIds : undefined,
+      });
       if (current) {
         const memberIds = new Set(current.expenses.map((e) => e.id));
         const merged = [...current.expenses, ...result.expenses.filter((e) => !memberIds.has(e.id))].sort((a, b) =>
@@ -273,7 +369,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
       setGenerateError('Pilih Metode Pembayaran terlebih dahulu.');
       return;
     }
-    await runSearch(existing, genDepartmentId, genFromDate, genToDate, genPaymentMethodGroup);
+    await runSearch(existing, genDepartmentId, genFromDate, genToDate, genPaymentMethodGroup, genCreditCardId, genActivityTypeIds);
   };
 
   const toggleSelectedExpense = (id: string) =>
@@ -305,13 +401,9 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
         unitId: r.unitId,
         percentage: Number(r.percentage) || 0,
         description: r.description || undefined,
-        analyticAcc: r.analyticAcc || undefined,
-        account: r.account || undefined,
-        wilayah: r.wilayah || undefined,
-        linePr: r.linePr || undefined,
+        account: PRODUCT_BY_UNIT_CODE[r.unitCode],
         qty: r.qty ? Number(r.qty) : undefined,
         curr: r.curr || undefined,
-        rate: r.rate ? Number(r.rate) : undefined,
       }));
 
   // Edit mode's "Save Changes" - replaces the draft's Expenses + allocations.
@@ -341,6 +433,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
         departmentId: genDepartmentId,
         expenseIds: Array.from(selectedExpenseIds),
         paymentMethodGroup: genPaymentMethodGroup,
+        creditCardId: genPaymentMethodGroup === 'CORPORATE_CARD' ? genCreditCardId || undefined : undefined,
         allocations: buildAllocationPayload(),
       });
       router.push('/settlement');
@@ -384,7 +477,35 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
       {loadingExisting && <p style={{ fontSize: 13, color: 'var(--muted)' }}>Loading settlement...</p>}
 
       <div>
-        <div className="form-grid">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px 16px' }}>
+          <div className="form-row">
+            <label>Activity Type (optional — blank = any activity type)</label>
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '4px 16px',
+                maxHeight: 80,
+                overflowY: 'auto',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: 8,
+              }}
+            >
+              {activityTypeOptions.map((a) => (
+                <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'normal' }}>
+                  <input
+                    type="checkbox"
+                    style={{ width: 'auto' }}
+                    disabled={isEdit}
+                    checked={genActivityTypeIds.includes(a.id)}
+                    onChange={() => toggleActivityType(a.id)}
+                  />
+                  {a.name}
+                </label>
+              ))}
+            </div>
+          </div>
           <div className="form-row">
             <label>Department</label>
             <select value={genDepartmentId} disabled={isEdit} onChange={(e) => setGenDepartmentId(e.target.value)}>
@@ -416,6 +537,19 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
               <option value="NON_CORPORATE_CARD">Non Corporate Card</option>
             </select>
           </div>
+          {genPaymentMethodGroup === 'CORPORATE_CARD' && (
+            <div className="form-row">
+              <label>Corporate Card</label>
+              <select value={genCreditCardId} disabled={isEdit || !genDepartmentId} onChange={(e) => setGenCreditCardId(e.target.value)}>
+                <option value="">{genDepartmentId ? 'All Corporate Cards' : 'Select a Department first'}</option>
+                {creditCardOptions.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.bank} •••• {c.last4} ({c.user?.name ?? '-'})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {generateError && <div className="error-text">{generateError}</div>}
@@ -482,12 +616,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
 
                 {selectedExpenseIds.size > 0 && (
                 <div style={{ marginTop: 20 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <strong style={{ fontSize: 12 }}>Settlement Allocation</strong>
-                    <button type="button" className="btn" onClick={generateAllocationRows}>
-                      Generate Allocation
-                    </button>
-                  </div>
+                  <strong style={{ fontSize: 12 }}>Settlement Allocation</strong>
                   {allocationRows.map((row) => {
                     const amount = allocationAmount(row);
                     return (
@@ -496,72 +625,21 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                         style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginTop: 8 }}
                       >
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
-                          <AllocFieldLabel label="Settlement No">
-                            <input type="text" value="(auto)" disabled style={{ width: '100%', color: 'var(--muted)' }} />
+                          <AllocFieldLabel label="Product">
+                            <input type="text" disabled value={PRODUCT_BY_UNIT_CODE[row.unitCode] ?? '-'} style={{ width: '100%' }} />
                           </AllocFieldLabel>
                           <AllocFieldLabel label="Unit">
-                            <select
-                              style={{ width: '100%' }}
-                              value={row.unitId}
-                              onChange={(e) => selectAllocationUnit(row.key, e.target.value)}
-                            >
-                              <option value="">Select</option>
-                              {unitOptions.map((u) => (
-                                <option key={u.id} value={u.id}>
-                                  {u.code}
-                                </option>
-                              ))}
-                            </select>
+                            <input type="text" disabled value={row.unitCode} style={{ width: '100%' }} />
                           </AllocFieldLabel>
                           <AllocFieldLabel label="Persentase (%)">
                             <NumberInput
                               allowDecimals
                               style={{ width: '100%' }}
                               value={row.percentage}
-                              onChange={(v) => updateAllocationRow(row.key, { percentage: v })}
+                              onChange={(v) => updateAllocationPercentage(row.key, v)}
                             />
                           </AllocFieldLabel>
-                          <AllocFieldLabel label="Analytic Acc">
-                            <input
-                              type="text"
-                              style={{ width: '100%' }}
-                              value={row.analyticAcc}
-                              onChange={(e) => updateAllocationRow(row.key, { analyticAcc: e.target.value })}
-                            />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Account">
-                            <input
-                              type="text"
-                              style={{ width: '100%' }}
-                              value={row.account}
-                              onChange={(e) => updateAllocationRow(row.key, { account: e.target.value })}
-                            />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Wilayah">
-                            <input
-                              type="text"
-                              style={{ width: '100%' }}
-                              value={row.wilayah}
-                              onChange={(e) => updateAllocationRow(row.key, { wilayah: e.target.value })}
-                            />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Line PR">
-                            <input
-                              type="text"
-                              style={{ width: '100%' }}
-                              value={row.linePr}
-                              onChange={(e) => updateAllocationRow(row.key, { linePr: e.target.value })}
-                            />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Qty">
-                            <NumberInput
-                              allowDecimals
-                              style={{ width: '100%' }}
-                              value={row.qty}
-                              onChange={(v) => updateAllocationRow(row.key, { qty: v })}
-                            />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Curr">
+                          <AllocFieldLabel label="Currency">
                             <input
                               type="text"
                               style={{ width: '100%' }}
@@ -569,21 +647,15 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                               onChange={(e) => updateAllocationRow(row.key, { curr: e.target.value })}
                             />
                           </AllocFieldLabel>
-                          <AllocFieldLabel label="Original Price">
-                            <input type="text" disabled value={formatCurrency(amount)} style={{ width: '100%' }} />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Rate">
+                          <AllocFieldLabel label="Quantity">
                             <NumberInput
                               allowDecimals
                               style={{ width: '100%' }}
-                              value={row.rate}
-                              onChange={(v) => updateAllocationRow(row.key, { rate: v })}
+                              value={row.qty}
+                              onChange={(v) => updateAllocationRow(row.key, { qty: v })}
                             />
                           </AllocFieldLabel>
-                          <AllocFieldLabel label="Unit Price">
-                            <input type="text" disabled value={formatCurrency(amount)} style={{ width: '100%' }} />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Total Price (IDR)">
+                          <AllocFieldLabel label="Total">
                             <input type="text" disabled value={formatCurrency(amount)} style={{ width: '100%' }} />
                           </AllocFieldLabel>
                         </div>
@@ -598,15 +670,6 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                             />
                           </AllocFieldLabel>
                         </div>
-
-                        <button
-                          type="button"
-                          className="btn btn-danger"
-                          style={{ marginTop: 8 }}
-                          onClick={() => removeAllocationRow(row.key)}
-                        >
-                          Remove
-                        </button>
                       </div>
                     );
                   })}
@@ -616,11 +679,19 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                 {isEdit ? (
                   <button
                     className="btn btn-primary"
-                    disabled={creatingSettlement || selectedExpenseIds.size === 0 || existing?.status !== 'DRAFT_SETTLEMENT'}
+                    disabled={
+                      creatingSettlement ||
+                      selectedExpenseIds.size === 0 ||
+                      (existing?.status !== 'DRAFT_SETTLEMENT' && existing?.status !== 'REVISION')
+                    }
                     style={{ marginTop: 12 }}
                     onClick={saveChanges}
                   >
-                    {creatingSettlement ? 'Saving...' : `Save Changes (${selectedExpenseIds.size})`}
+                    {creatingSettlement
+                      ? 'Saving...'
+                      : existing?.status === 'REVISION'
+                      ? `Resubmit (${selectedExpenseIds.size})`
+                      : `Save Changes (${selectedExpenseIds.size})`}
                   </button>
                 ) : showDuplicateConfirm && previewResult.existingDraftSettlement ? (
                   <div style={{ marginTop: 12, padding: 12, borderRadius: 6, background: 'var(--input-bg)' }}>

@@ -42,19 +42,23 @@ export default function FileThumb({ path, fileName, isImage }: FileThumbProps) {
     };
   }, [path]);
 
+  const loading = !url && !failed;
+
   const thumb = (
     <div
+      className={loading ? 'file-thumb-shimmer' : undefined}
       style={{
-        width: 72,
-        height: 72,
-        borderRadius: 6,
+        width: 80,
+        height: 80,
+        borderRadius: 'var(--radius)',
         border: '1px solid var(--border)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
-        background: 'var(--input-bg)',
-        fontSize: 22,
+        background: 'var(--surface-2)',
+        boxShadow: 'var(--shadow-sm)',
+        fontSize: 24,
       }}
     >
       {isImage && url ? (
@@ -62,6 +66,8 @@ export default function FileThumb({ path, fileName, isImage }: FileThumbProps) {
         <img src={url} alt={fileName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
       ) : failed ? (
         '⚠️'
+      ) : loading ? (
+        ''
       ) : (
         '📄'
       )}
@@ -95,7 +101,7 @@ export default function FileThumb({ path, fileName, isImage }: FileThumbProps) {
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: 4,
+            gap: 6,
             width: 84,
             textAlign: 'center',
             cursor: url ? 'pointer' : 'default',
@@ -120,7 +126,7 @@ export default function FileThumb({ path, fileName, isImage }: FileThumbProps) {
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: 4,
+            gap: 6,
             width: 84,
             textAlign: 'center',
             cursor: url ? 'pointer' : 'default',

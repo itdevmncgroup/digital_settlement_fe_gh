@@ -58,6 +58,8 @@ export default function MobileSettlementApprovalPage() {
   const [bulkReason, setBulkReason] = useState('');
   const [bulkRejecting, setBulkRejecting] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
+  const [revising, setRevising] = useState(false);
+  const [reviseReason, setReviseReason] = useState('');
   // Closing an empty batch (every member Expense rejected out) permanently
   // REJECTs the whole Settlement (see submitTier) - that must never fire
   // without the approver explicitly confirming it, so it's gated behind this
@@ -68,6 +70,7 @@ export default function MobileSettlementApprovalPage() {
   // animation so the keyboard doesn't fight it on iOS Safari.
   const rejectTextareaRef = useRef<HTMLTextAreaElement>(null);
   const bulkRejectTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const reviseTextareaRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!rejecting) return;
     const t = setTimeout(() => rejectTextareaRef.current?.focus(), 250);
@@ -78,6 +81,11 @@ export default function MobileSettlementApprovalPage() {
     const t = setTimeout(() => bulkRejectTextareaRef.current?.focus(), 250);
     return () => clearTimeout(t);
   }, [bulkRejecting]);
+  useEffect(() => {
+    if (!revising) return;
+    const t = setTimeout(() => reviseTextareaRef.current?.focus(), 250);
+    return () => clearTimeout(t);
+  }, [revising]);
 
   const refresh = async () => {
     try {
@@ -187,6 +195,25 @@ export default function MobileSettlementApprovalPage() {
     }
   };
 
+  // Sends the whole batch back exactly one tier instead of finishing the
+  // per-expense review - available any time it's this approver's turn, not
+  // only once every expense has been individually reviewed (that's the point
+  // of bouncing the batch mid-review).
+  const reviseTier = async () => {
+    setSubmitBusy(true);
+    setError('');
+    try {
+      await api.post(`/settlements/${id}/revise`, { reason: reviseReason.trim() });
+      router.push('/m/approvals');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Revise failed');
+    } finally {
+      setSubmitBusy(false);
+      setRevising(false);
+      setReviseReason('');
+    }
+  };
+
   if (error && !settlement) {
     return (
       <div className="error-text" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
@@ -222,10 +249,22 @@ export default function MobileSettlementApprovalPage() {
 
       {error && <div className="error-text">{error}</div>}
 
-      {canAct && selectableExpenses.length > 0 && (
+      {canAct && !selectMode && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '8px 0' }}>
+          <button className="btn" style={{ minHeight: 36 }} disabled={bulkBusy || submitBusy} onClick={() => setRevising(true)}>
+            Revise
+          </button>
+          {selectableExpenses.length > 0 && (
+            <button className="btn" style={{ minHeight: 36 }} disabled={bulkBusy} onClick={toggleSelectMode}>
+              Select
+            </button>
+          )}
+        </div>
+      )}
+      {selectMode && selectableExpenses.length > 0 && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '8px 0' }}>
           <button className="btn" style={{ minHeight: 36 }} disabled={bulkBusy} onClick={toggleSelectMode}>
-            {selectMode ? 'Cancel' : 'Select'}
+            Cancel
           </button>
         </div>
       )}
@@ -413,6 +452,35 @@ export default function MobileSettlementApprovalPage() {
               </button>
               <button className="btn btn-danger" style={{ flex: 1 }} disabled={bulkReason.trim().length < 3 || bulkBusy} onClick={bulkReject}>
                 {bulkBusy ? 'Processing...' : 'Reject'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {revising && (
+        <div
+          className="m-sheet-backdrop"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => !submitBusy && !reviseReason.trim() && setRevising(false)}
+        >
+          <div className="m-sheet" onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 10px' }}>Revise reason (send back one tier)</h3>
+            {error && <div className="error-text" style={{ marginBottom: 8 }}>{error}</div>}
+            <textarea ref={reviseTextareaRef} value={reviseReason} onChange={(e) => setReviseReason(e.target.value)} rows={3} />
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>Minimum 3 characters</div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button className="btn" style={{ flex: 1 }} disabled={submitBusy} onClick={() => setRevising(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                style={{ flex: 1 }}
+                disabled={reviseReason.trim().length < 3 || submitBusy}
+                onClick={reviseTier}
+              >
+                {submitBusy ? 'Processing...' : 'Revise'}
               </button>
             </div>
           </div>

@@ -13,8 +13,12 @@ import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
 import LocalFileThumb from '@/components/LocalFileThumb';
+import FileThumb from '@/components/FileThumb';
+import FileOrCameraInput from '@/components/FileOrCameraInput';
 import SplashLoader from '@/components/SplashLoader';
+import { useToast } from '@/components/ToastProvider';
 import Modal from '@/components/Modal';
+import ExpenseFromRequestModal from '@/components/ExpenseFromRequestModal';
 import ZoomableImage from '@/components/ZoomableImage';
 import { NavIcon } from '@/components/NavIcons';
 
@@ -37,6 +41,14 @@ interface BankTransactionRef {
   batch: { id: string; fileName: string };
 }
 
+interface StatementLine {
+  id: string;
+  lineNo: number;
+  transactionDate: string | null;
+  rawDescription: string;
+  amount: string;
+}
+
 interface ExpenseRow {
   id: string;
   expenseNo: string;
@@ -46,11 +58,33 @@ interface ExpenseRow {
   status: string;
   salesId: string;
   sales: { name: string };
-  advertiser: { name: string };
+  advertiser: { name: string; agency?: { name: string } | null } | null;
+  extraAgencies?: { agency: { name: string } }[];
   brand: { name: string };
   department: { id: string; name: string } | null;
   bankTransactions: BankTransactionRef[];
   isMatched: boolean;
+  settlement: { id: string; settlementNo: string; status: string } | null;
+}
+
+interface ExpenseImagePhoto {
+  id: string;
+  fileName: string;
+  mimeType: string;
+}
+
+interface ExpenseImageInvoice {
+  id: string;
+  invoiceNumber: string | null;
+  finalTotal: string | null;
+  files: { id: string; fileName: string; mimeType: string }[];
+}
+
+interface ExpenseImages {
+  expenseNo: string;
+  amount: string;
+  photos: ExpenseImagePhoto[];
+  invoices: ExpenseImageInvoice[];
 }
 
 // Expense.isMatched is the source of truth (also true for a manual match with no
@@ -60,11 +94,25 @@ function isMatched(row: { isMatched: boolean }) {
   return row.isMatched;
 }
 
+// Advertiser's own Agency plus any extra Agencies tagged on the Expense, de-duplicated.
+function agencyNames(row: Pick<ExpenseRow, 'advertiser' | 'extraAgencies'>) {
+  const names = [row.advertiser?.agency?.name, ...(row.extraAgencies ?? []).map((e) => e.agency.name)].filter((n): n is string => !!n);
+  return names.length ? Array.from(new Set(names)).join(', ') : '-';
+}
+
 function matchedTransaction(row: { bankTransactions: BankTransactionRef[] }) {
   return row.bankTransactions.find((t) => MATCHED_TXN_STATUSES.includes(t.status)) || null;
 }
 
-const EDITABLE_STATUSES = ['DRAFT', 'REJECTED', 'REVISION'];
+// A Settlement stays DRAFT_SETTLEMENT until its own "Submit" is pressed
+// (settlements.service.ts) - manual match/unmatch is only safe up to that
+// point, same rule the backend now enforces on the match endpoints.
+function isSettlementSubmitted(row: { settlement: { status: string } | null }) {
+  return !!row.settlement && row.settlement.status !== 'DRAFT_SETTLEMENT';
+}
+
+// PENDING_SALES_ADMIN: raised by Corsec from an Expense Request, completed by a Sales Admin of its Department.
+const EDITABLE_STATUSES = ['DRAFT', 'PENDING_SALES_ADMIN', 'REJECTED', 'REVISION'];
 
 // Anything currently sitting with an approver - matches ApprovalStatus.PENDING
 // on the backend's ApprovalRequest for this Expense.
@@ -117,6 +165,7 @@ interface ParsedReceiptItem {
 
 interface ParsedReceipt {
   merchantName: string | null;
+  invoiceDate: string | null;
   items: ParsedReceiptItem[];
   subtotal: number | null;
   tax: number | null;
@@ -173,6 +222,7 @@ const PARTICIPANT_SECTIONS: { category: ParticipantCategory; label: string }[] =
 
 const STATUS_OPTIONS = [
   'DRAFT',
+  'PENDING_SALES_ADMIN',
   'APPROVAL_HEAD_POD',
   'APPROVAL_KOORDINATOR',
   'APPROVAL_SUPERVISOR',
@@ -195,7 +245,7 @@ function StatusBadge({ status }: { status: string }) {
       ? 'badge-success'
       : status === 'REJECTED'
       ? 'badge-danger'
-      : status === 'PENDING_APPROVAL' || status.startsWith('APPROVAL_')
+      : status === 'PENDING_APPROVAL' || status === 'PENDING_SALES_ADMIN' || status.startsWith('APPROVAL_')
       ? 'badge-warning'
       : 'badge-info';
   return <span className={`badge ${cls}`}>{status}</span>;
@@ -250,9 +300,21 @@ export default function ExpensesPage() {
 function ExpensesPageInner() {
   const { hasRole, hasPermission, user } = useAuth();
   const canActOnBehalf = hasRole('ADMINISTRATOR');
-  const canCreate = hasRole('SALES') || canActOnBehalf || hasPermission('expense.create');
+  // expense.create.all/.owndept: key an Expense in on behalf of another user (the requestor
+  // stays that user) - all users / only Sales of the caller's own Department(s).
+  const canPickRequestor = canActOnBehalf || hasPermission('expense.create.all', 'expense.create.owndept');
+  // expense.create.own: own Expense only (default of role SALES, no requestor picker).
+  const canCreateOwn = hasRole('SALES') || hasPermission('expense.create.own');
+  const canCreate = canCreateOwn || canPickRequestor;
+  // Anyone who can't create their own (Admin, Sales Admin...) is only ever an inputter, so a
+  // requestor must be picked; a Sales / expense.create.own holder may leave it as themselves.
+  const requestorRequired = canActOnBehalf || (canPickRequestor && !canCreateOwn);
+  // Corsec (Position CORSEC) raises Expenses from approved Expense Requests instead of the full form.
+  const isCorsec = user?.position?.code === 'CORSEC';
+  const [showFromRequest, setShowFromRequest] = useState(false);
   const canAutoMatch = canActOnBehalf || hasPermission('expense.automatch');
   const canExport = canActOnBehalf || hasPermission('expense.export');
+  const canManualMatch = canActOnBehalf || hasPermission('expense.match.all', 'expense.match.owndept');
 
   // Filters live in the URL (not just component state) so browser Back from
   // an expense's detail page - which lands on a fresh instance of this page,
@@ -268,10 +330,22 @@ function ExpensesPageInner() {
   const [search, setSearch] = useState(() => searchParams.get('search') ?? '');
   const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '');
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const toast = useToast();
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [resendingId, setResendingId] = useState<string | null>(null);
+  const [matchingId, setMatchingId] = useState<string | null>(null);
+  const [imagesExpenseId, setImagesExpenseId] = useState<string | null>(null);
+  const [imagesExpense, setImagesExpense] = useState<ExpenseImages | null>(null);
+  const [imagesLoading, setImagesLoading] = useState(false);
+  const [statementModalOpen, setStatementModalOpen] = useState(false);
+  const [statementPopup, setStatementPopup] = useState<{
+    fileName: string;
+    matchedTxnId: string;
+    lines: StatementLine[];
+  } | null>(null);
+  const [statementLoading, setStatementLoading] = useState(false);
+  const [statementError, setStatementError] = useState('');
 
   const [departmentFilter, setDepartmentFilter] = useState(() => searchParams.get('departmentId') ?? '');
   const [fromDate, setFromDate] = useState(() => searchParams.get('fromDate') ?? defaultFromDate());
@@ -521,14 +595,32 @@ function ExpensesPageInner() {
   }, [selectedAdvertiserIds]);
 
   useEffect(() => {
-    const targetSalesId = canActOnBehalf ? onBehalfOfSalesId : user?.id;
+    const targetSalesId = canPickRequestor && onBehalfOfSalesId ? onBehalfOfSalesId : requestorRequired ? '' : user?.id;
     if (!targetSalesId) {
       setDepartmentOptions([]);
       return;
     }
-    const path = canActOnBehalf ? `/departments?salesId=${targetSalesId}&active=true` : '/departments/me';
-    api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
-  }, [canActOnBehalf, onBehalfOfSalesId, user?.id]);
+    const onBehalf = targetSalesId !== user?.id;
+    const path = onBehalf ? `/departments?salesId=${targetSalesId}&active=true` : '/departments/me';
+    // Without expense.create.all / Admin, only the caller's own Department(s) are valid (the API enforces it too).
+    const limitToMine = onBehalf && !canActOnBehalf && !hasPermission('expense.create.all');
+    let cancelled = false;
+    api
+      .get<DepartmentOption[]>(path)
+      .then(async (opts) => {
+        if (limitToMine) {
+          const mine = await api.get<DepartmentOption[]>('/departments/me');
+          const mineIds = new Set(mine.map((d) => d.id));
+          opts = opts.filter((d) => mineIds.has(d.id));
+        }
+        if (!cancelled) setDepartmentOptions(opts);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canPickRequestor, canActOnBehalf, requestorRequired, onBehalfOfSalesId, user?.id]);
 
   // Department auto-fills to the Sales's own (first) Department once known - still changeable below.
   useEffect(() => {
@@ -540,23 +632,25 @@ function ExpensesPageInner() {
 
   // Unit auto-fills from the Sales's own profile (or the on-behalf-of Sales's profile).
   useEffect(() => {
-    const targetUnitId = canActOnBehalf ? salesOptions.find((s) => s.id === onBehalfOfSalesId)?.unitId : user?.unitId;
+    const targetUnitId =
+      canPickRequestor && onBehalfOfSalesId
+        ? salesOptions.find((s) => s.id === onBehalfOfSalesId)?.unitId
+        : requestorRequired
+          ? undefined
+          : user?.unitId;
     if (targetUnitId && !form.unitId) {
       setForm((f) => (f.unitId ? f : { ...f, unitId: targetUnitId }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canActOnBehalf, onBehalfOfSalesId, salesOptions, user?.unitId]);
+  }, [canPickRequestor, requestorRequired, onBehalfOfSalesId, salesOptions, user?.unitId]);
 
   useEffect(() => {
     api.get<CategoryOption[]>('/expense-categories?active=true').then(setCategories).catch(() => undefined);
-    if (canActOnBehalf) {
-      api
-        .get<SalesOption[]>('/users')
-        .then((users) => setSalesOptions(users.filter((u) => u.roles.includes('SALES'))))
-        .catch(() => undefined);
+    if (canPickRequestor) {
+      api.get<SalesOption[]>('/expenses/requestors').then(setSalesOptions).catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canActOnBehalf]);
+  }, [canPickRequestor]);
 
   const resetForm = () => {
     setForm({
@@ -638,7 +732,14 @@ function ExpensesPageInner() {
             ]);
           }
 
-          setForm((f) => (!f.amount && result.total != null ? { ...f, amount: String(result.total) } : f));
+          // Transaction date -> Expense Date (ISO yyyy-mm-dd, same shape DatePicker
+          // holds). Only while still empty: first scanned date wins, and a date the
+          // user already picked by hand is never overwritten.
+          setForm((f) => ({
+            ...f,
+            amount: !f.amount && result.total != null ? String(result.total) : f.amount,
+            expenseDate: !f.expenseDate && result.invoiceDate ? result.invoiceDate : f.expenseDate,
+          }));
         } catch (err) {
           warnings.push(err instanceof ApiError ? err.message : `OCR scan failed for ${file.name} - enter invoice details manually.`);
         }
@@ -708,7 +809,7 @@ function ExpensesPageInner() {
         advertiserId: primaryAdvertiserId,
         brandId: primaryBrandId,
       };
-      if (canActOnBehalf && onBehalfOfSalesId) payload.salesId = onBehalfOfSalesId;
+      if (canPickRequestor && onBehalfOfSalesId) payload.salesId = onBehalfOfSalesId;
 
       const validItems = items
         .filter((it) => it.description.trim() && it.price)
@@ -772,10 +873,9 @@ function ExpensesPageInner() {
   const resendApprovalEmail = async (expenseId: string) => {
     setResendingId(expenseId);
     setError('');
-    setNotice('');
     try {
       await api.post(`/expenses/${expenseId}/resend-approval-email`);
-      setNotice('Reminder email sent to the current approver.');
+      toast.success('Reminder email has been sent to the current approver.');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to resend approval email');
     } finally {
@@ -783,7 +883,56 @@ function ExpensesPageInner() {
     }
   };
 
-  const noSalesReason = canActOnBehalf && !onBehalfOfSalesId ? 'Pick a Sales to fill in this expense on their behalf.' : null;
+  const manualMatch = async (expenseId: string) => {
+    setMatchingId(expenseId);
+    setError('');
+    try {
+      await api.post(`/bank-settlements/expenses/${expenseId}/manual-match`);
+      const expenseNo = rows.find((r) => r.id === expenseId)?.expenseNo;
+      toast.success(expenseNo ? `${expenseNo} has been marked as Matched.` : 'Expense has been marked as Matched.');
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Match failed');
+    } finally {
+      setMatchingId(null);
+    }
+  };
+
+  const openImages = async (expenseId: string) => {
+    setImagesExpenseId(expenseId);
+    setImagesExpense(null);
+    setImagesLoading(true);
+    try {
+      const detail = await api.get<ExpenseImages>(`/expenses/${expenseId}`);
+      setImagesExpense(detail);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to load images');
+      setImagesExpenseId(null);
+    } finally {
+      setImagesLoading(false);
+    }
+  };
+
+  const openStatementPopup = async (txn: BankTransactionRef) => {
+    setStatementModalOpen(true);
+    setStatementError('');
+    setStatementLoading(true);
+    setStatementPopup(null);
+    try {
+      const batch = await api.get<{ transactions: StatementLine[] }>(`/bank-settlements/${txn.batchId}`);
+      setStatementPopup({
+        fileName: txn.batch.fileName,
+        matchedTxnId: txn.id,
+        lines: [...batch.transactions].sort((a, b) => a.lineNo - b.lineNo),
+      });
+    } catch (err) {
+      setStatementError(err instanceof ApiError ? err.message : 'Failed to load statement detail');
+    } finally {
+      setStatementLoading(false);
+    }
+  };
+
+  const noSalesReason = requestorRequired && !onBehalfOfSalesId ? 'Pick a requestor to fill in this expense on their behalf.' : null;
   // Advertiser/Brand have no single inherited value anymore (Pre-Event is retired) -
   // the first entry picked in the Advertiser/Brand lists below becomes the primary
   // (mandatory) one, the rest are "additional".
@@ -817,7 +966,12 @@ function ExpensesPageInner() {
               Export to PDF
             </button>
           )}
-          {canCreate && (
+          {isCorsec && (
+            <button className="btn btn-primary" onClick={() => setShowFromRequest(true)}>
+              + New Expense from Request
+            </button>
+          )}
+          {canCreate && !isCorsec && (
             <button
               className="btn btn-primary"
               onClick={() => {
@@ -868,6 +1022,17 @@ function ExpensesPageInner() {
           </button>
         </div>
       </div>
+
+      {showFromRequest && (
+        <ExpenseFromRequestModal
+          onClose={() => setShowFromRequest(false)}
+          onCreated={() => {
+            setShowFromRequest(false);
+            toast.success('Expense created and sent to the Sales Admin for completion.');
+            load();
+          }}
+        />
+      )}
 
       {scanResultModalOpen && !matching && (matchedBatches.length > 0 || matchError) && (
         <Modal title="Scan Result" onClose={() => setScanResultModalOpen(false)} wide>
@@ -1011,12 +1176,19 @@ function ExpensesPageInner() {
 
       {showForm && (
         <form className="card" onSubmit={onSubmit}>
-          {canActOnBehalf && (
+          {canPickRequestor && (
             <div className="form-row" style={{ maxWidth: 360 }}>
-              <label>Sales (manual entry on behalf of)</label>
-              <select value={onBehalfOfSalesId} onChange={(e) => setOnBehalfOfSalesId(e.target.value)}>
-                <option value="">Select Sales</option>
-                {salesOptions.map((s) => (
+              <label>{requestorRequired ? 'Requestor (entry on behalf of) *' : 'Requestor'}</label>
+              <select
+                value={onBehalfOfSalesId}
+                onChange={(e) => {
+                  setOnBehalfOfSalesId(e.target.value);
+                  // Department/Unit/Corporate Card belong to the requestor - re-derive them.
+                  setForm((f) => ({ ...f, departmentId: '', unitId: '', creditCardId: '' }));
+                }}
+              >
+                <option value="">{requestorRequired ? 'Select requestor' : `Myself (${user?.name ?? ''})`}</option>
+                {salesOptions.filter((s) => s.id !== user?.id).map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name} ({s.employeeId})
                   </option>
@@ -1031,7 +1203,7 @@ function ExpensesPageInner() {
             <>
               <div className="form-grid">
                 <div className="form-row">
-                  <label>Unit</label>
+                  <label>Unit *</label>
                   <select required value={form.unitId} onChange={(e) => setForm({ ...form, unitId: e.target.value })}>
                     <option value="">Select unit</option>
                     {unitOptions.map((u) => (
@@ -1042,7 +1214,7 @@ function ExpensesPageInner() {
                   </select>
                 </div>
                 <div className="form-row">
-                  <label>Activity Type</label>
+                  <label>Activity Type *</label>
                   <select required value={form.activityTypeId} onChange={(e) => setForm({ ...form, activityTypeId: e.target.value })}>
                     <option value="">Select activity</option>
                     {activityTypeOptions.map((a) => (
@@ -1053,15 +1225,15 @@ function ExpensesPageInner() {
                   </select>
                 </div>
                 <div className="form-row">
-                  <label>Expense Date</label>
+                  <label>Expense Date *</label>
                   <DatePicker required value={form.expenseDate} onChange={(v) => setForm({ ...form, expenseDate: v })} />
                 </div>
                 <div className="form-row">
-                  <label>Amount (IDR)</label>
+                  <label>Amount (IDR) *</label>
                   <NumberInput required allowDecimals value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} />
                 </div>
                 <div className="form-row" style={{ gridColumn: '1 / -1' }}>
-                  <label>Purpose</label>
+                  <label>Purpose *</label>
                   <input required value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} />
                 </div>
                 <div className="form-row">
@@ -1116,7 +1288,7 @@ function ExpensesPageInner() {
                   </select>
                 </div>
                 <div className="form-row">
-                  <label>Payment Method</label>
+                  <label>Payment Method *</label>
                   <select
                     required
                     value={form.paymentMethodId}
@@ -1132,7 +1304,7 @@ function ExpensesPageInner() {
                 </div>
                 {selectedPaymentMethodCode === 'CORPORATE_CARD' && (
                   <div className="form-row">
-                    <label>Corporate Card</label>
+                    <label>Corporate Card *</label>
                     <select
                       required
                       disabled={!form.departmentId}
@@ -1196,7 +1368,7 @@ function ExpensesPageInner() {
 
                 <div>
                   <label style={{ display: 'block', marginBottom: 8 }}>
-                    Advertiser (bisa lebih dari 1) — pilihan pertama jadi primary
+                    Advertiser * (bisa lebih dari 1) — pilihan pertama jadi primary
                   </label>
                   {selectedAdvertisers.length > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
@@ -1232,7 +1404,7 @@ function ExpensesPageInner() {
 
                 <div>
                   <label style={{ display: 'block', marginBottom: 8 }}>
-                    Brand (bisa lebih dari 1, berdasarkan Advertiser di atas) — pilihan pertama jadi primary
+                    Brand * (bisa lebih dari 1, berdasarkan Advertiser di atas) — pilihan pertama jadi primary
                   </label>
                   {selectedBrands.length > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
@@ -1361,11 +1533,10 @@ function ExpensesPageInner() {
 
               <div style={{ marginTop: 16 }}>
                 <label style={{ display: 'block', marginBottom: 8 }}>Upload Foto Kegiatan (optional, bisa lebih dari 1)</label>
-                <input
-                  type="file"
+                <FileOrCameraInput
                   accept="image/jpeg,image/png,image/webp"
-                  multiple
-                  onChange={(e) => setActivityPhotos((prev) => [...prev, ...Array.from(e.target.files || [])])}
+                  cameraTitle="Foto Kegiatan"
+                  onFiles={(files) => setActivityPhotos((prev) => [...prev, ...files])}
                 />
                 {activityPhotos.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
@@ -1381,11 +1552,11 @@ function ExpensesPageInner() {
                   Upload Invoice / Receipt (optional, image/pdf, bisa lebih dari 1) — struk foto (JPEG/PNG/WebP) akan
                   di-scan otomatis pakai OCR
                 </label>
-                <input
-                  type="file"
+                <FileOrCameraInput
                   accept="image/jpeg,image/png,image/webp,application/pdf"
-                  multiple
-                  onChange={(e) => onInvoiceFilesChange(Array.from(e.target.files || []))}
+                  cameraTitle="Scan Invoice"
+                  disabled={ocrScanning}
+                  onFiles={onInvoiceFilesChange}
                 />
                 {invoiceFiles.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
@@ -1553,7 +1724,6 @@ function ExpensesPageInner() {
       )}
 
       {error && <div className="error-text">{error}</div>}
-      {notice && <div style={{ color: 'var(--success, #16a34a)' }}>{notice}</div>}
 
       <div className="card">
         <table>
@@ -1563,6 +1733,7 @@ function ExpensesPageInner() {
               <th>Date</th>
               <th>Sales</th>
               <th>Department</th>
+              <th>Agency</th>
               <th>Advertiser</th>
               <th>Brand</th>
               <th>Purpose</th>
@@ -1575,7 +1746,9 @@ function ExpensesPageInner() {
           </thead>
           <tbody>
             {pagination.pageRows.map((r) => {
-              const canEdit = EDITABLE_STATUSES.includes(r.status) && (r.salesId === user?.id || canActOnBehalf);
+              const canEdit =
+                EDITABLE_STATUSES.includes(r.status) &&
+                (r.salesId === user?.id || canActOnBehalf || (r.status === 'PENDING_SALES_ADMIN' && hasRole('SALES_ADMIN')));
               const canResend = isPendingApprovalStatus(r.status) && (r.salesId === user?.id || canActOnBehalf);
               const matched = isMatched(r);
               const txn = matchedTransaction(r);
@@ -1587,6 +1760,7 @@ function ExpensesPageInner() {
                   <td>{formatDate(r.expenseDate)}</td>
                   <td>{r.sales?.name}</td>
                   <td>{r.department?.name || '-'}</td>
+                  <td>{agencyNames(r)}</td>
                   <td>{r.advertiser?.name}</td>
                   <td>{r.brand?.name}</td>
                   <td>{r.purpose}</td>
@@ -1599,15 +1773,20 @@ function ExpensesPageInner() {
                   </td>
                   <td>
                     {txn ? (
-                      <Link href={`/bank-matching?batchId=${txn.batchId}`} title="Open in Statement / bank matching">
+                      <button
+                        type="button"
+                        onClick={() => openStatementPopup(txn)}
+                        title="View transaction date and amount captured by scanner"
+                        style={{ background: 'none', border: 'none', padding: 0, color: 'var(--primary)', cursor: 'pointer', font: 'inherit', textAlign: 'left' }}
+                      >
                         {txn.batch.fileName}
-                      </Link>
+                      </button>
                     ) : (
                       '-'
                     )}
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       {canEdit && (
                         <Link href={`/expenses/${r.id}`} className="btn">
                           Edit
@@ -1624,6 +1803,27 @@ function ExpensesPageInner() {
                           {resendingId === r.id ? 'Sending...' : 'Resend'}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => openImages(r.id)}
+                        title="View activity and invoice photos"
+                        aria-label="View activity and invoice photos"
+                      >
+                        <NavIcon name="eye" />
+                      </button>
+                      {canManualMatch && !matched && !isSettlementSubmitted(r) && (
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={matchingId === r.id}
+                          onClick={() => manualMatch(r.id)}
+                          title={matchingId === r.id ? 'Matching...' : 'Manually mark this expense as Matched'}
+                          aria-label="Manually mark this expense as Matched"
+                        >
+                          <NavIcon name="link" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -1631,7 +1831,7 @@ function ExpensesPageInner() {
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={12} style={{ color: 'var(--muted)' }}>No expenses</td>
+                <td colSpan={13} style={{ color: 'var(--muted)' }}>No expenses</td>
               </tr>
             )}
           </tbody>
@@ -1649,6 +1849,108 @@ function ExpensesPageInner() {
           />
         )}
       </div>
+
+      {imagesExpenseId && (
+        <Modal title="Expense Images" onClose={() => setImagesExpenseId(null)} wide>
+          {imagesLoading && <div>Loading...</div>}
+          {!imagesLoading && imagesExpense && (
+            <>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '10px 14px',
+                  marginBottom: 16,
+                  borderRadius: 10,
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>Expense</div>
+                  <div style={{ fontWeight: 600 }}>{imagesExpense.expenseNo}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>Amount</div>
+                  <div style={{ fontWeight: 700, fontSize: 18 }}>{formatCurrency(imagesExpense.amount)}</div>
+                </div>
+              </div>
+              <strong>Activity Photos</strong>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 16 }}>
+                {imagesExpense.photos.map((p) => (
+                  <FileThumb key={p.id} path={`/expenses/photos/${p.id}/download`} fileName={p.fileName} isImage={p.mimeType.startsWith('image/')} />
+                ))}
+                {imagesExpense.photos.length === 0 && <div style={{ color: 'var(--muted)' }}>No activity photos</div>}
+              </div>
+              <strong>Invoice Photos</strong>
+              {imagesExpense.invoices.length === 0 && <div style={{ color: 'var(--muted)', marginTop: 8 }}>No invoices</div>}
+              {imagesExpense.invoices.map((inv) => (
+                <div key={inv.id} style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    {inv.invoiceNumber || 'Invoice'}
+                    {inv.finalTotal != null && ` · ${formatCurrency(inv.finalTotal)}`}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                    {inv.files.map((f) => (
+                      <FileThumb key={f.id} path={`/invoices/files/${f.id}/download`} fileName={f.fileName} isImage={f.mimeType.startsWith('image/')} />
+                    ))}
+                    {inv.files.length === 0 && <div style={{ color: 'var(--muted)' }}>No files</div>}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </Modal>
+      )}
+
+      {statementModalOpen && (
+        <Modal title="Statement Transaction" onClose={() => setStatementModalOpen(false)} wide>
+          {statementLoading && <div>Loading...</div>}
+          {!statementLoading && statementError && <div className="error-text">{statementError}</div>}
+          {!statementLoading && statementPopup && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div>
+                <span style={{ color: 'var(--muted)', fontSize: 12 }}>File</span>
+                <div>{statementPopup.fileName}</div>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Date</th>
+                    <th>Description</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {statementPopup.lines.map((line) => {
+                    const isCurrent = line.id === statementPopup.matchedTxnId;
+                    return (
+                      <tr
+                        key={line.id}
+                        title={isCurrent ? 'This is the scanned row matched to the current expense' : undefined}
+                        style={isCurrent ? { background: 'var(--success-bg, #dcfce7)', fontWeight: 600 } : undefined}
+                      >
+                        <td>{line.lineNo}</td>
+                        <td>{line.transactionDate ? formatDate(line.transactionDate) : '-'}</td>
+                        <td>{line.rawDescription}</td>
+                        <td>{formatCurrency(line.amount)}</td>
+                      </tr>
+                    );
+                  })}
+                  {statementPopup.lines.length === 0 && (
+                    <tr>
+                      <td colSpan={4} style={{ color: 'var(--muted)' }}>No lines scanned from this statement</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

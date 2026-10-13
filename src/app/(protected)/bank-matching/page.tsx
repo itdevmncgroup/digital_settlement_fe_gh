@@ -66,6 +66,18 @@ interface ExpenseSearchResult {
   sales: { name: string };
 }
 
+// Browsers can't query OS-level file locks directly - attempting to read the
+// file is the only signal. A file held open exclusively by another app
+// (e.g. Excel, Adobe Reader) throws NotReadableError on read.
+async function isFileLocked(file: File): Promise<boolean> {
+  try {
+    await file.slice(0, 1).arrayBuffer();
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function formatCurrency(value: string | number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(value));
 }
@@ -235,11 +247,31 @@ function BankMatchingPageInner() {
     if (!departmentId) return;
     setUploading(true);
     setError('');
+
+    const lockedNames: string[] = [];
+    const uploadable: File[] = [];
+    for (const file of files) {
+      if (await isFileLocked(file)) {
+        lockedNames.push(file.name);
+      } else {
+        uploadable.push(file);
+      }
+    }
+    if (lockedNames.length > 0) {
+      setError(
+        `File sedang dibuka di aplikasi lain, harap close dulu file yang dibuka di aplikasi lain: ${lockedNames.join(', ')}`
+      );
+    }
+    if (uploadable.length === 0) {
+      setUploading(false);
+      return;
+    }
+
     const fields: Record<string, string> = { departmentId };
     if (creditCardId) fields.creditCardId = creditCardId;
     let lastBatch: BatchDetail | null = null;
     try {
-      for (const file of files) {
+      for (const file of uploadable) {
         let result = (await uploadFile('/bank-settlements', file, '', fields)) as BatchDetail;
         if (result.alreadyScanned) {
           const rescan = await confirmRescan(file.name);

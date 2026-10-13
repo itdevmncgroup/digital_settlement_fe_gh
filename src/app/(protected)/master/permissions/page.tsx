@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useConfirm } from '@/components/ConfirmDialog';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
@@ -14,6 +15,7 @@ interface PermissionRow {
 }
 
 export default function PermissionsPage() {
+  const confirm = useConfirm();
   const [permissions, setPermissions] = useState<PermissionRow[]>([]);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -49,6 +51,22 @@ export default function PermissionsPage() {
     setEditingId(p.id);
     setForm({ code: p.code, description: p.description ?? '' });
     setShowForm(true);
+  };
+
+  const onDelete = async (p: PermissionRow) => {
+    const ok = await confirm({
+      title: 'Delete Permission?',
+      message: `"${p.code}" will be permanently deleted. Code that checks this permission will no longer be satisfied by any role. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setError('');
+    try {
+      await api.del(`/permissions/${p.id}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Delete failed');
+    }
   };
 
   const onSubmit = async (e: FormEvent) => {
@@ -145,6 +163,9 @@ export default function PermissionsPage() {
                   </button>
                   <button className={`btn ${p.isActive ? 'btn-danger' : 'btn-success'}`} onClick={() => toggleActive(p)}>
                     {p.isActive ? 'Deactivate' : 'Activate'}
+                  </button>
+                  <button className="btn btn-danger" onClick={() => onDelete(p)}>
+                    Delete
                   </button>
                 </td>
               </tr>

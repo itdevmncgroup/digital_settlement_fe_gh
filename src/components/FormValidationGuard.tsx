@@ -60,11 +60,7 @@ export default function FormValidationGuard() {
       pendingByForm.delete(form);
       if (!fields || fields.length === 0) return;
 
-      const labels = fields.map(getFieldLabel);
-      const message =
-        labels.length === 1
-          ? `Please fill in the "${labels[0]}" field before continuing.`
-          : `Please fill in the following fields: ${labels.join(', ')}.`;
+      const message = fields.length === 1 ? `Please fill in the "${getFieldLabel(fields[0])}" field before continuing.` : 'Please fill in the following fields.';
       toast.error(message);
       fields[0].focus();
     };

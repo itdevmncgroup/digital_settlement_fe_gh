@@ -5,9 +5,12 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import SplashLoader from '@/components/SplashLoader';
+import DepartmentTotalsCard, { DepartmentTotal } from '@/components/DepartmentTotalsCard';
+import WebMobileGate from '@/components/WebMobileGate';
 import { useAuth } from '@/lib/auth';
 import { positionMatches } from '@/lib/position';
 import { formatDate } from '@/lib/date';
+import { currentApprovalStep, ExpenseRequest, POSITION_CORSEC, POSITION_SALES_CS } from '@/lib/expenseRequests';
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -36,16 +39,18 @@ interface ExpenseSummaryRow {
 }
 
 interface SalesDashboard {
-  month: Bucket;
+  total: Bucket;
   pending: Bucket;
-  fullyApproved: Bucket;
+  complete: Bucket;
   needsRevisionCount: number;
   recent: ExpenseSummaryRow[];
+  // One row per Department of the user - only sent when they belong to more than one.
+  byDepartment?: DepartmentTotal[];
 }
 
 // Own expenses (any status) open the mobile Expense form - same look as New
 // Expense, read-only once past DRAFT (see ExpenseForm's `readOnly`). Someone
-// else's Expense (GenericDashboard's recent list can include non-owned rows
+// else's Expense (the recent list can include non-owned rows
 // for back-office/Sales Admin roles) keeps opening the general detail page.
 function expenseHref(r: ExpenseSummaryRow, viewerId: string | undefined) {
   return r.salesId === viewerId ? `/m/expense/${r.id}/edit` : `/expenses/${r.id}`;
@@ -72,43 +77,104 @@ function RecentList({ rows, viewerId }: { rows: ExpenseSummaryRow[]; viewerId: s
 }
 
 export default function MobileDashboardPage() {
-  const { user, hasPermission } = useAuth();
+  const { user, hasRole, hasPermission } = useAuth();
   const router = useRouter();
   const positionCode = user?.position?.code;
-  const ownDashboard =
-    positionMatches(positionCode, 'HEAD_POD')
+  // Every web mobile dashboard needs webmobile.dashboard.read.own/.owndept - without it the
+  // user stays here and WebMobileGate shows "no access" instead of bouncing to a gated page.
+  const canDashboard = hasRole('ADMINISTRATOR') || hasPermission('webmobile.dashboard.read.own', 'webmobile.dashboard.read.owndept');
+  const ownDashboard = !canDashboard
+    ? null
+    : positionMatches(positionCode, 'HEAD-POD')
       ? '/m/dashboard-head-dept'
       : positionMatches(positionCode, 'CO-CSO')
-      ? '/m/dashboard-co-cso'
-      : user?.roles.includes('MANAGEMENT')
-      ? '/m/dashboard-management'
-      : null;
+        ? '/m/dashboard-co-cso'
+        : user?.roles.includes('MANAGEMENT')
+          ? '/m/dashboard-management'
+          : null;
   useEffect(() => {
     if (ownDashboard) router.replace(ownDashboard);
   }, [ownDashboard, router]);
   if (ownDashboard) return <SplashLoader message="Opening your dashboard" />;
-  if (user && !hasPermission('dashboard-sales.read.own')) return <GenericDashboard />;
-  return <SalesDashboardView />;
+  return (
+    <WebMobileGate permissions={['webmobile.dashboard.read.own', 'webmobile.dashboard.read.owndept']}>
+      <SalesDashboardView />
+    </WebMobileGate>
+  );
+}
+
+const RANGES = [
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: '90d', label: 'Last 90 days' },
+  { value: '1y', label: 'Last year' },
+];
+
+// Documents waiting on the logged-in user right now - same rule as /m/approvals:
+// GET /approvals/pending also returns look-ahead rows (isMyTurn false), and
+// Expense Requests are a separate flow GET /expense-requests supplies.
+// Also counts Expense Requests waiting on the user's Position: Sales Customer
+// Service (budget input) and Corsec (verification). null until loaded.
+// `href` is /m/approvals: it lists everything waiting on the user, budget-stage
+// Expense Requests included (tap one to fill in the budget).
+function usePendingApprovalCount(): { count: number; href: string } | null {
+  const { user, hasRole } = useAuth();
+  const [result, setResult] = useState<{ count: number; href: string } | null>(null);
+  const userId = user?.id;
+  const positionCode = user?.position?.code;
+  const isAdmin = hasRole('ADMINISTRATOR');
+
+  useEffect(() => {
+    if (!userId) return;
+    Promise.all([
+      api.get<{ isMyTurn?: boolean }[]>('/approvals/pending').catch(() => []),
+      api.get<ExpenseRequest[]>('/expense-requests').catch(() => [] as ExpenseRequest[]),
+    ]).then(([rows, requests]) => {
+      const mine = requests.filter((q) => {
+        if (q.status === 'BUDGET_INPUT') return positionCode === POSITION_SALES_CS || isAdmin;
+        if (q.status === 'CORSEC_VERIFICATION') return positionCode === POSITION_CORSEC || isAdmin;
+        const step = currentApprovalStep(q);
+        return !!step && (step.resolvedApprover?.id === userId || isAdmin);
+      });
+      setResult({ count: rows.filter((r) => r.isMyTurn || isAdmin).length + mine.length, href: '/m/approvals' });
+    });
+  }, [userId, positionCode, isAdmin]);
+
+  return result;
 }
 
 function SalesDashboardView() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  const waitingApproval = usePendingApprovalCount();
+  const [range, setRange] = useState('30d');
   const [data, setData] = useState<SalesDashboard | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    setData(null);
+    setError('');
     api
-      .get<SalesDashboard>('/dashboard/sales')
+      .get<SalesDashboard>(`/dashboard/sales?range=${range}`)
       .then(setData)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load dashboard'));
-  }, []);
+  }, [range]);
 
-  const monthLabel = new Date().toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  const listHref = (bucket: string) => `/m/dashboard/expenses?bucket=${bucket}&range=${range}`;
+  const rangeLabel = RANGES.find((r) => r.value === range)?.label ?? '';
 
   return (
     <div>
       <h1>Hi, {user?.name?.split(' ')[0]} 👋</h1>
-      <div className="m-subtitle">Your expenses · {monthLabel}</div>
+      <div className="m-subtitle">{hasPermission('webmobile.dashboard.read.owndept') ? 'Your department expenses' : 'Your expenses'}</div>
+      <div className="m-filters">
+        <select value={range} onChange={(e) => setRange(e.target.value)} aria-label="Period">
+          {RANGES.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+      </div>
 
       {error && <div className="error-text">{error}</div>}
       {!data && !error && <SkeletonList />}
@@ -116,25 +182,54 @@ function SalesDashboardView() {
       {data && (
         <>
           <div className="m-hero">
-            <div className="m-hero-label">Created in {monthLabel}</div>
-            <div className="m-hero-value">{formatCompactCurrency(data.month.totalAmount)}</div>
-            <div className="m-hero-sub">{data.month.count} expense(s)</div>
+            <div className="m-hero-label">Created · {rangeLabel}</div>
+            <div className="m-hero-value">{formatCompactCurrency(data.total.totalAmount)}</div>
+            <div className="m-hero-sub">{data.total.count} expense(s)</div>
           </div>
 
           <div className="m-stat-grid">
+            {!!waitingApproval?.count && (
+              <StatTile
+                wide
+                label="Waiting approval"
+                value={waitingApproval.count}
+                icon="clock"
+                tone="var(--warning)"
+                sub="Document(s) need your approval"
+                href={waitingApproval.href}
+              />
+            )}
+            <StatTile
+              label="Total pending"
+              value={formatCompactCurrency(data.pending.totalAmount)}
+              icon="clock"
+              tone="var(--warning)"
+              sub="Not sent to Odoo"
+              href={listHref('pending')}
+            />
+            <StatTile
+              label="Total complete"
+              value={formatCompactCurrency(data.complete.totalAmount)}
+              icon="check-circle"
+              tone="var(--success)"
+              sub="Sent to Odoo"
+              href={listHref('complete')}
+            />
             <StatTile
               label="Pending approval"
               value={data.pending.count}
               icon="clock"
               tone="var(--warning)"
-              sub={formatCompactCurrency(data.pending.totalAmount)}
+              sub="Expense(s)"
+              href={listHref('pending')}
             />
             <StatTile
-              label="Fully approved"
-              value={data.fullyApproved.count}
+              label="Complete approval"
+              value={data.complete.count}
               icon="check-circle"
               tone="var(--success)"
-              sub={formatCompactCurrency(data.fullyApproved.totalAmount)}
+              sub="Expense(s)"
+              href={listHref('complete')}
             />
             {data.needsRevisionCount > 0 && (
               <StatTile
@@ -144,65 +239,15 @@ function SalesDashboardView() {
                 icon="alert"
                 tone="var(--danger)"
                 sub="Rejected or need revision"
-                href="/m/expenses"
+                href={listHref('attention')}
               />
             )}
           </div>
 
+          <DepartmentTotalsCard data={data.byDepartment} title={`Expense per department · ${rangeLabel}`} />
+
           <div className="m-section-title">Latest expenses</div>
           <RecentList rows={data.recent} viewerId={user?.id} />
-        </>
-      )}
-    </div>
-  );
-}
-
-// Roles without a dedicated dashboard: what they act on - pending approvals plus
-// the last 30 days of expenses the API lets them see.
-function GenericDashboard() {
-  const { user } = useAuth();
-  const [pending, setPending] = useState<number | null>(null);
-  const [expenses, setExpenses] = useState<ExpenseSummaryRow[] | null>(null);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    const from = d.toISOString().slice(0, 10);
-    api.get<unknown[]>('/approvals/pending').then((r) => setPending(r.length)).catch(() => setPending(0));
-    api
-      .get<ExpenseSummaryRow[]>(`/expenses?fromDate=${from}`)
-      .then(setExpenses)
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load dashboard'));
-  }, []);
-
-  const total = (expenses ?? []).reduce((sum, e) => sum + Number(e.amount), 0);
-
-  return (
-    <div>
-      <h1>Hi, {user?.name?.split(' ')[0]} 👋</h1>
-      <div className="m-subtitle">Last 30 days</div>
-      {error && <div className="error-text">{error}</div>}
-      {!expenses && !error && <SkeletonList />}
-      {expenses && (
-        <>
-          <div className="m-hero">
-            <div className="m-hero-label">Expenses</div>
-            <div className="m-hero-value">{formatCompactCurrency(total)}</div>
-            <div className="m-hero-sub">{expenses.length} expense(s)</div>
-          </div>
-          <div className="m-stat-grid">
-            <StatTile
-              wide
-              label="Waiting your approval"
-              value={pending ?? 0}
-              icon="clock"
-              tone="var(--warning)"
-              href="/m/approvals"
-            />
-          </div>
-          <div className="m-section-title">Latest expenses</div>
-          <RecentList rows={expenses.slice(0, 5)} viewerId={user?.id} />
         </>
       )}
     </div>

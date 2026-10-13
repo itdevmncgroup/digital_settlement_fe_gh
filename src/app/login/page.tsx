@@ -1,11 +1,12 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { ApiError } from '@/lib/api';
 import { NavIcon } from '@/components/NavIcons';
 import SplashLoader from '@/components/SplashLoader';
+import { resolveViewMode, ViewMode, VIEW_STORAGE_KEY } from '@/lib/viewMode';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -15,6 +16,12 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('desktop');
+
+  // Preselect the saved choice, else the device default (client-only: needs window/localStorage).
+  useEffect(() => {
+    setViewMode(resolveViewMode());
+  }, []);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -22,6 +29,11 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email, password);
+      try {
+        localStorage.setItem(VIEW_STORAGE_KEY, viewMode);
+      } catch {
+        /* storage blocked - falls back to device default */
+      }
       setSignedIn(true);
       router.replace('/');
     } catch (err) {
@@ -62,6 +74,15 @@ export default function LoginPage() {
 
         <label htmlFor="password">Password</label>
         <input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+
+        <label>View</label>
+        <div className="login-view-toggle" role="group" aria-label="View mode">
+          {(['mobile', 'desktop'] as const).map((mode) => (
+            <button key={mode} type="button" aria-pressed={viewMode === mode} onClick={() => setViewMode(mode)}>
+              {mode === 'mobile' ? 'Mobile' : 'Desktop'}
+            </button>
+          ))}
+        </div>
 
         {error && <div className="error-text">{error}</div>}
 

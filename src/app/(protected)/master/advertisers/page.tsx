@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useConfirm } from '@/components/ConfirmDialog';
 import { useAuth } from '@/lib/auth';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
@@ -25,6 +26,7 @@ interface Advertiser {
 // Brand page (each Brand picks its owning Advertiser there), not here.
 export default function AdvertisersPage() {
   const { hasRole } = useAuth();
+  const confirm = useConfirm();
   const canManage = hasRole('ADMINISTRATOR');
 
   const [advertisers, setAdvertisers] = useState<Advertiser[]>([]);
@@ -59,6 +61,23 @@ export default function AdvertisersPage() {
     setEditingId(a.id);
     setForm({ code: a.code, name: a.name, agencyId: a.agency?.id ?? '' });
     setShowForm(true);
+  };
+
+  const onDelete = async (row: { id: string; }, label: string) => {
+    const ok = await confirm({
+      title: 'Delete Advertiser?',
+      message: `"${label}" will be permanently deleted. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setError('');
+    try {
+      await api.del(`/advertisers/${row.id}`);
+      if (editingId === row.id) closeForm();
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Delete failed');
+    }
   };
 
   const onSubmit = async (e: FormEvent) => {
@@ -151,9 +170,14 @@ export default function AdvertisersPage() {
                 <td>{a.isActive ? 'Yes' : 'No'}</td>
                 {canManage && (
                   <td>
-                    <button className="btn" onClick={() => startEdit(a)}>
-                      Edit
-                    </button>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="btn" onClick={() => startEdit(a)}>
+                        Edit
+                      </button>
+                      <button className="btn btn-danger" onClick={() => onDelete(a, a.name)}>
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 )}
               </tr>

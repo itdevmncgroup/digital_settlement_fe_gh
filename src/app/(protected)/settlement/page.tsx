@@ -3,7 +3,7 @@
 import { Fragment, Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, downloadFile, postForm } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDate, formatDateTime } from '@/lib/date';
 import Modal from '@/components/Modal';
@@ -51,8 +51,11 @@ interface SettlementRow {
   settlementNo: string;
   totalAmount: string;
   // DRAFT (unused in practice) | DRAFT_SETTLEMENT | APPROVAL_SLS_MAR_DIR |
-  // APPROVAL_VP_ACC_BIL_TAX_3TV | APPROVAL_CO_CFO_3TV | COMPLETE | REJECTED.
+  // APPROVAL_VP_ACC_BIL_TAX_3TV | APPROVAL_CO_CFO_3TV | REVISION | COMPLETE | REJECTED.
   status: string;
+  // Only meaningful once status is COMPLETE - NOT_STARTED | PENDING | SENT | FAILED.
+  odooSyncStatus: string;
+  odooSyncError: string | null;
   createdAt: string;
   department: { id: string; name: string };
   createdBy: { name: string };
@@ -77,6 +80,29 @@ interface GeneratedExpenseRow {
   sales: { name: string };
 }
 
+interface UnitOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
+// GET /settlements/:id/draft-pr/preview - same columns as the Settlement
+// Allocation section of the Settlement form.
+interface DraftPrPreview {
+  settlementNo: string;
+  unit: UnitOption;
+  rows: {
+    id: string;
+    product: string | null;
+    unitCode: string;
+    percentage: string;
+    curr: string;
+    qty: string;
+    total: string;
+    description: string | null;
+  }[];
+}
+
 function formatCurrency(value: string | number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(value));
 }
@@ -99,6 +125,13 @@ function SettlementPageInner() {
 
   const [rows, setRows] = useState<SettlementRow[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
+  // "Create Draft PR" (pick a Unit, send a COMPLETE settlement to Odoo): Admin, or
+  // settlement.send.odoo.all for any settlement, or settlement.send.odoo.owndept
+  // for settlements of the user's own Department(s) (/departments/me for non-Admin).
+  const canDraftPr = (departmentId: string) =>
+    canManage ||
+    hasPermission('settlement.send.odoo.all') ||
+    (hasPermission('settlement.send.odoo.owndept') && departmentOptions.some((d) => d.id === departmentId));
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -121,6 +154,17 @@ function SettlementPageInner() {
   const [addSelectedIds, setAddSelectedIds] = useState<Set<string>>(new Set());
   const [addError, setAddError] = useState('');
   const [adding, setAdding] = useState(false);
+
+  const [draftPrSettlement, setDraftPrSettlement] = useState<SettlementRow | null>(null);
+  const [unitOptions, setUnitOptions] = useState<UnitOption[]>([]);
+  const [draftPrUnitId, setDraftPrUnitId] = useState('');
+  const [draftPrPreview, setDraftPrPreview] = useState<DraftPrPreview | null>(null);
+  const [draftPrLoading, setDraftPrLoading] = useState(false);
+  const [draftPrSending, setDraftPrSending] = useState(false);
+  const [draftPrPdfLoading, setDraftPrPdfLoading] = useState(false);
+  const [draftPrError, setDraftPrError] = useState('');
+  // Bank statement PDF whose pages get inserted after the Form Jamuan pages.
+  const [draftPrStatement, setDraftPrStatement] = useState<File | null>(null);
 
   const load = () => {
     const qs = departmentFilter ? `?departmentId=${departmentFilter}` : '';
@@ -248,6 +292,100 @@ function SettlementPageInner() {
     }
   };
 
+  // Sends the expense back exactly one approval tier instead of rejecting it
+  // outright - the owner can then edit and resubmit at that same tier.
+  const reviseExpense = async (expenseId: string) => {
+    const reason = await prompt({ title: 'Revise reason (send back one tier)', danger: true });
+    if (!reason) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.post(`/approvals/expense/${expenseId}/revise`, { reason });
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Revise failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openDraftPr = (r: SettlementRow) => {
+    setDraftPrSettlement(r);
+    setDraftPrUnitId('');
+    setDraftPrPreview(null);
+    setDraftPrStatement(null);
+    setDraftPrError('');
+    if (unitOptions.length === 0) {
+      api.get<UnitOption[]>('/units?active=true').then(setUnitOptions).catch(() => setDraftPrError('Failed to load units'));
+    }
+  };
+
+  const previewDraftPr = async () => {
+    if (!draftPrSettlement || !draftPrUnitId) return;
+    setDraftPrLoading(true);
+    setDraftPrError('');
+    try {
+      setDraftPrPreview(await api.get<DraftPrPreview>(`/settlements/${draftPrSettlement.id}/draft-pr/preview?unitId=${draftPrUnitId}`));
+    } catch (err) {
+      setDraftPrPreview(null);
+      setDraftPrError(err instanceof ApiError ? err.message : 'Failed to load preview');
+    } finally {
+      setDraftPrLoading(false);
+    }
+  };
+
+  // The API never throws on a failed Odoo push - it records FAILED + the error on
+  // the Settlement, so read the result instead of assuming success.
+  const sendDraftPr = async () => {
+    if (!draftPrSettlement || !draftPrUnitId) return;
+    setDraftPrSending(true);
+    setDraftPrError('');
+    try {
+      // Multipart so the picked bank statement goes with it - the server rebuilds
+      // the same PDF as "Generate PDF" and sends it to Odoo as the attachment.
+      const res = await postForm<{ odooSyncStatus: string; odooSyncError: string | null }>(
+        `/settlements/${draftPrSettlement.id}/draft-pr/send`,
+        { unitId: draftPrUnitId },
+        draftPrStatement,
+      );
+      load();
+      if (res.odooSyncStatus === 'SENT') setDraftPrSettlement(null);
+      else setDraftPrError(`Send to Odoo failed${res.odooSyncError ? `: ${res.odooSyncError}` : ''}. You can try again.`);
+    } catch (err) {
+      setDraftPrError(err instanceof ApiError ? err.message : 'Failed to send to Odoo');
+    } finally {
+      setDraftPrSending(false);
+    }
+  };
+
+  // Server builds the attachment PDF (Form Jamuan table, bank statement pages,
+  // photos/invoices per expense) - can take a few seconds with many images.
+  const downloadDraftPrPdf = async () => {
+    if (!draftPrSettlement) return;
+    setDraftPrPdfLoading(true);
+    setDraftPrError('');
+    try {
+      await downloadFile(`/settlements/${draftPrSettlement.id}/pdf`, `${draftPrSettlement.settlementNo}.pdf`, draftPrStatement);
+    } catch (err) {
+      setDraftPrError(err instanceof ApiError ? err.message : 'Failed to generate PDF');
+    } finally {
+      setDraftPrPdfLoading(false);
+    }
+  };
+
+  const retrySync = async (id: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      await api.post(`/settlements/${id}/retry-sync`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Retry failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div>
       <div className="toolbar">
@@ -296,6 +434,7 @@ function SettlementPageInner() {
               <th>Department</th>
               <th>Total Transaksi</th>
               <th>Status</th>
+              <th>Sent to Odoo</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -318,10 +457,24 @@ function SettlementPageInner() {
                   <td>
                     <span className={`badge ${r.status === 'COMPLETE' ? 'badge-success' : 'badge-info'}`}>{r.status}</span>
                   </td>
+                  <td>
+                    {r.status === 'COMPLETE' ? (
+                      <span
+                        className={`badge ${
+                          r.odooSyncStatus === 'SENT' ? 'badge-success' : r.odooSyncStatus === 'FAILED' ? 'badge-danger' : 'badge-warning'
+                        }`}
+                        title={r.odooSyncStatus === 'FAILED' ? r.odooSyncError ?? '' : undefined}
+                      >
+                        {r.odooSyncStatus}
+                      </span>
+                    ) : (
+                      <span className="badge badge-info">-</span>
+                    )}
+                  </td>
                   <td style={{ display: 'flex', gap: 8 }}>
-                    {canGenerate && r.status === 'DRAFT_SETTLEMENT' && (
+                    {canGenerate && (r.status === 'DRAFT_SETTLEMENT' || r.status === 'REVISION') && (
                       <Link href={`/settlement/${r.id}/edit`} className="btn">
-                        Edit
+                        {r.status === 'REVISION' ? 'Resubmit' : 'Edit'}
                       </Link>
                     )}
                     {canGenerate && r.status === 'DRAFT_SETTLEMENT' && (
@@ -343,11 +496,31 @@ function SettlementPageInner() {
                         Mark Complete
                       </button>
                     )}
+                    {canDraftPr(r.department.id) && r.status === 'COMPLETE' && (
+                      <button
+                        className="btn"
+                        title={r.odooSyncStatus === 'SENT' ? 'Already sent to Odoo' : 'Create Draft PR'}
+                        aria-label="Create Draft PR"
+                        disabled={busy || r.odooSyncStatus === 'SENT'}
+                        onClick={() => openDraftPr(r)}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+                          <path d="M14 3v5h5" />
+                          <path d="M12 12v6M9 15h6" />
+                        </svg>
+                      </button>
+                    )}
+                    {canManage && r.status === 'COMPLETE' && r.odooSyncStatus === 'FAILED' && (
+                      <button className="btn" disabled={busy} onClick={() => retrySync(r.id)}>
+                        Retry Odoo Sync
+                      </button>
+                    )}
                   </td>
                 </tr>
                 {expandedId === r.id && (
                   <tr>
-                    <td colSpan={6} style={{ background: 'var(--input-bg)' }}>
+                    <td colSpan={7} style={{ background: 'var(--input-bg)' }}>
                       <div style={{ padding: 8 }}>
                         <strong style={{ fontSize: 12 }}>Expenses in this settlement ({r.expenses.length})</strong>
                         {r.expenses.map((e) => {
@@ -376,6 +549,9 @@ function SettlementPageInner() {
                                 <>
                                   <button className="btn btn-approve" disabled={busy} onClick={() => approveExpense(e.id)}>
                                     Approve ({currentStep?.position.name})
+                                  </button>
+                                  <button className="btn" disabled={busy} onClick={() => reviseExpense(e.id)}>
+                                    Revise
                                   </button>
                                   <button className="btn btn-reject" disabled={busy} onClick={() => rejectExpense(e.id)}>
                                     Reject
@@ -426,7 +602,7 @@ function SettlementPageInner() {
             ))}
             {filteredRows.length === 0 && (
               <tr>
-                <td colSpan={6} style={{ color: 'var(--muted)' }}>
+                <td colSpan={7} style={{ color: 'var(--muted)' }}>
                   No settlements
                 </td>
               </tr>
@@ -446,6 +622,104 @@ function SettlementPageInner() {
           />
         )}
       </div>
+
+      {draftPrSettlement && (
+        <Modal title={`Create Draft PR - ${draftPrSettlement.settlementNo}`} onClose={() => setDraftPrSettlement(null)} wide>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <select
+              value={draftPrUnitId}
+              onChange={(e) => {
+                setDraftPrUnitId(e.target.value);
+                setDraftPrPreview(null);
+                setDraftPrError('');
+              }}
+              style={{ width: 240 }}
+              aria-label="Unit"
+            >
+              <option value="">Select Unit...</option>
+              {unitOptions.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+            <button className="btn" disabled={!draftPrUnitId || draftPrLoading || draftPrSending} onClick={previewDraftPr}>
+              {draftPrLoading ? 'Loading...' : 'Preview'}
+            </button>
+          </div>
+
+          {draftPrPreview && (
+            <>
+              <table style={{ marginTop: 12 }}>
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Unit</th>
+                    <th>Persentase (%)</th>
+                    <th>Currency</th>
+                    <th>Quantity</th>
+                    <th>Total</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {draftPrPreview.rows.map((a) => (
+                    <tr key={a.id}>
+                      <td>{a.product ?? '-'}</td>
+                      <td>{a.unitCode}</td>
+                      <td>{Number(a.percentage)}</td>
+                      <td>{a.curr}</td>
+                      <td>{Number(a.qty)}</td>
+                      <td>{formatCurrency(a.total)}</td>
+                      <td>{a.description ?? '-'}</td>
+                    </tr>
+                  ))}
+                  {draftPrPreview.rows.length === 0 && (
+                    <tr>
+                      <td colSpan={7} style={{ color: 'var(--muted)' }}>
+                        No allocation lines
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              <div style={{ marginTop: 12 }}>
+                <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>Bank Statement (PDF)</label>
+                <input
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  aria-label="Bank Statement PDF"
+                  disabled={draftPrPdfLoading || draftPrSending}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] ?? null;
+                    if (file && file.type !== 'application/pdf') {
+                      setDraftPrStatement(null);
+                      e.target.value = '';
+                      setDraftPrError('Bank statement must be a PDF file');
+                      return;
+                    }
+                    setDraftPrStatement(file);
+                    setDraftPrError('');
+                  }}
+                />
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                  Optional. Every page is added after the Form Jamuan pages. Without a file, no bank statement is included in the PDF.
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <button className="btn" disabled={draftPrPdfLoading || draftPrSending} onClick={downloadDraftPrPdf}>
+                  {draftPrPdfLoading ? 'Generating PDF...' : 'Generate PDF'}
+                </button>
+                <button className="btn btn-primary" disabled={draftPrSending || draftPrPdfLoading} onClick={sendDraftPr}>
+                  {draftPrSending ? 'Sending...' : 'Send To Odoo'}
+                </button>
+              </div>
+            </>
+          )}
+
+          {draftPrError && <div className="error-text">{draftPrError}</div>}
+        </Modal>
+      )}
 
       {addModalSettlement && (
         <Modal title={`Add Expenses to ${addModalSettlement.settlementNo}`} onClose={() => setAddModalSettlement(null)} wide>

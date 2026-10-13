@@ -111,6 +111,27 @@ export const api = {
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
 
+// Several files under one multipart field (default "files"), for endpoints taking FilesInterceptor.
+// `extra` adds more multipart parts: `files` = other file fields, `fields` = plain text fields.
+export async function uploadFiles<T = unknown>(
+  path: string,
+  files: File[],
+  fieldName = 'files',
+  extra?: { files?: Record<string, File[]>; fields?: Record<string, string>; method?: 'POST' | 'PATCH' },
+): Promise<T> {
+  const form = new FormData();
+  for (const file of files) form.append(fieldName, file);
+  for (const [name, list] of Object.entries(extra?.files ?? {})) for (const file of list) form.append(name, file);
+  for (const [name, value] of Object.entries(extra?.fields ?? {})) form.append(name, value);
+  const res = await authedFetch(path, { method: extra?.method ?? 'POST', body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }));
+    const message = Array.isArray(body.message) ? body.message.join(', ') : body.message;
+    throw new ApiError(res.status, message || 'Upload failed');
+  }
+  return res.json();
+}
+
 export async function uploadFile(path: string, file: File, extraQuery = '', fields?: Record<string, string>): Promise<unknown> {
   const form = new FormData();
   form.append('file', file);
@@ -126,9 +147,32 @@ export async function uploadFile(path: string, file: File, extraQuery = '', fiel
   return res.json();
 }
 
-/** Fetches a file from an authenticated endpoint and triggers a browser download. */
-export async function downloadFile(path: string, fallbackFileName: string): Promise<void> {
-  const res = await authedFetch(path);
+/** POSTs multipart form fields plus an optional `file`, and returns the JSON response. */
+export async function postForm<T>(path: string, fields: Record<string, string>, file?: File | null): Promise<T> {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
+  if (file) form.append('file', file);
+  const res = await authedFetch(path, { method: 'POST', body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }));
+    const message = Array.isArray(body.message) ? body.message.join(', ') : body.message;
+    throw new ApiError(res.status, message || 'Request failed');
+  }
+  return res.json();
+}
+
+/**
+ * Fetches a file from an authenticated endpoint and triggers a browser download.
+ * Pass `upload` to POST a file (multipart field `file`) and download the response instead.
+ */
+export async function downloadFile(path: string, fallbackFileName: string, upload?: File | null): Promise<void> {
+  let init: RequestInit = {};
+  if (upload) {
+    const form = new FormData();
+    form.append('file', upload);
+    init = { method: 'POST', body: form };
+  }
+  const res = await authedFetch(path, init);
   if (!res.ok) {
     const body = await res.json().catch(() => ({ message: res.statusText }));
     throw new ApiError(res.status, body.message || 'Download failed');
@@ -146,7 +190,9 @@ export async function downloadFile(path: string, fallbackFileName: string): Prom
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  // Revoking right after click() can cut a larger file's download short (an unreadable
+  // PDF/xlsx) - give the browser time to start reading the blob first.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 /**

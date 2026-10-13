@@ -149,6 +149,92 @@
   white-space: nowrap;
 }
 
+.fab-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 34;
+  background: transparent;
+}
+
+.fab-wrap {
+  position: fixed;
+  right: 16px;
+  bottom: calc(86px + env(safe-area-inset-bottom));
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.fab {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  color: #fff;
+  background: var(--gradient-brand);
+  box-shadow: 0 10px 24px rgba(99, 82, 230, 0.4);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.fab svg {
+  width: 24px;
+  height: 24px;
+}
+
+.fab:active {
+  transform: scale(0.94);
+}
+
+.fab-open {
+  transform: rotate(45deg);
+}
+
+.fab-open:active {
+  transform: rotate(45deg) scale(0.94);
+}
+
+.fab-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  animation: m-fade-in 0.15s ease;
+}
+
+.fab-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fab-menu-item .nav-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.fab-menu-item:active {
+  background: var(--primary-soft);
+}
+
 /* ---------- Web Mobile: page kit (scoped to .m-page) ---------- */
 
 .m-page {
@@ -207,6 +293,25 @@
 
 .m-page .btn:active {
   transform: scale(0.98);
+}
+
+/* Approve/Revise/Reject sit three-in-a-row here (actions.css sizes them for a
+   two-button desktop row) - phone widths clip "Revise" otherwise. */
+.m-page .btn-approve,
+.m-page .btn-reject,
+.m-page .btn-revise {
+  min-height: 40px;
+  padding: 8px 6px;
+  gap: 4px;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.m-page .btn-approve::before,
+.m-page .btn-reject::before,
+.m-page .btn-revise::before {
+  width: 13px;
+  height: 13px;
 }
 
 .m-subtitle {

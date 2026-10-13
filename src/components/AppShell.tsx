@@ -25,6 +25,9 @@ interface NavItem {
   // Position codes that never see the item (e.g. the generic dashboard for Head POD / CO-CSO, who have their own).
   hidePositions?: string[];
   hideRoles?: string[];
+  // Extra gate on top of roles/positions: the user must also hold one of these (ADMINISTRATOR
+  // exempt). Used by the Web Mobile dashboards - webmobile.dashboard.read.* decides who gets one.
+  requirePermissions?: string[];
 }
 
 interface NavGroup {
@@ -34,14 +37,17 @@ interface NavGroup {
 
 // Phone-friendly pages under /m. Shown as a sidebar group for everyone allowed,
 // and as the bottom tab bar in Mobile View.
+const MOBILE_DASHBOARD_PERMISSIONS = ['webmobile.dashboard.read.own', 'webmobile.dashboard.read.owndept'];
+
 const MOBILE_NAV: NavItem[] = [
   {
     href: '/m/dashboard',
     label: 'Dashboard',
     icon: 'dashboard',
     roles: [],
-    hidePositions: ['HEAD_POD', 'CO-CSO'],
+    hidePositions: ['HEAD-POD', 'CO-CSO'],
     hideRoles: ['MANAGEMENT'],
+    requirePermissions: MOBILE_DASHBOARD_PERMISSIONS,
   },
   {
     href: '/m/dashboard-head-dept',
@@ -49,7 +55,8 @@ const MOBILE_NAV: NavItem[] = [
     tabLabel: 'Dashboard',
     icon: 'dashboard',
     roles: [],
-    positions: ['HEAD_POD'],
+    positions: ['HEAD-POD'],
+    requirePermissions: MOBILE_DASHBOARD_PERMISSIONS,
   },
   {
     href: '/m/dashboard-co-cso',
@@ -58,6 +65,7 @@ const MOBILE_NAV: NavItem[] = [
     icon: 'dashboard',
     roles: [],
     positions: ['CO-CSO'],
+    requirePermissions: MOBILE_DASHBOARD_PERMISSIONS,
   },
   {
     href: '/m/dashboard-management',
@@ -65,34 +73,65 @@ const MOBILE_NAV: NavItem[] = [
     tabLabel: 'Dashboard',
     icon: 'dashboard',
     roles: ['MANAGEMENT'],
+    requirePermissions: MOBILE_DASHBOARD_PERMISSIONS,
   },
   {
     href: '/m/expense/new',
     label: 'New Expense',
     icon: 'plus',
-    roles: ['SALES'],
-    permissions: ['expense.create.all', 'expense.create.owndept'],
+    roles: ['ADMINISTRATOR'],
+    permissions: ['webmobile.expense.create.own', 'webmobile.expense.create.owndept'],
   },
-  { href: '/m/expenses', label: 'Expenses', icon: 'expenses', roles: [], hideRoles: ['MANAGEMENT'] },
+  {
+    href: '/m/expenses',
+    label: 'Expenses',
+    icon: 'expenses',
+    roles: ['ADMINISTRATOR'],
+    permissions: ['webmobile.expense.read.own', 'webmobile.expense.read.owndept'],
+  },
+  {
+    href: '/m/expense-requests',
+    label: 'Request Expense',
+    tabLabel: 'Request',
+    icon: 'expenses',
+    roles: ['ADMINISTRATOR'],
+    permissions: ['webmobile.request.expense.read.own', 'webmobile.request.expense.read.owndept'],
+  },
+  {
+    href: '/m/expense-requests/new',
+    label: 'New Request',
+    icon: 'plus',
+    roles: ['ADMINISTRATOR'],
+    permissions: ['webmobile.request.expense.create.own', 'webmobile.request.expense.create.owndept'],
+  },
   {
     href: '/m/settlement',
     label: 'Settlement',
     icon: 'settlement',
     roles: ['ADMINISTRATOR'],
-    permissions: ['settlement.read.owndept', 'settlement.read.all'],
+    permissions: ['webmobile.settlement.read.owndept'],
   },
+  // Gated by webmobile.approval.read.* rather than a Role / expense.approve.*: who has something
+  // pending here is a Position-resolved approver chain (ApprovalLevel) - e.g. CO-CSO never holds
+  // ADMINISTRATOR/MANAGEMENT nor the override permissions, yet is a normal tier approver - so the
+  // role defaults in prisma/seed.ts grant it to every approver role.
   {
     href: '/m/approvals',
     label: 'Approval',
     icon: 'approval',
-    roles: ['ADMINISTRATOR', 'MANAGEMENT'],
-    permissions: ['expense.approve.all', 'expense.approve.owndept'],
+    roles: ['ADMINISTRATOR'],
+    permissions: ['webmobile.approval.read.own', 'webmobile.approval.read.owndept'],
   },
-  { href: '/m/profile', label: 'Profile', icon: 'user', roles: [] },
+  {
+    href: '/m/profile',
+    label: 'Profile',
+    icon: 'user',
+    roles: ['ADMINISTRATOR'],
+    permissions: ['webmobile.profile.read.own'],
+  },
 ];
 
 const NAV: NavGroup[] = [
-  { section: 'Web Mobile', items: MOBILE_NAV },
   {
     section: 'Dashboard',
     items: [
@@ -120,28 +159,9 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    section: 'Reporting',
-    items: [
-      {
-        href: '/dashboard/expense-analytics',
-        label: 'Expense Analytics',
-        icon: 'dashboard',
-        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
-        permissions: ['dashboard.read.all', 'dashboard.read.owndept'],
-      },
-      { href: '/audit-logs', label: 'Audit Log', icon: 'audit-log', roles: ['ADMINISTRATOR'] },
-      {
-        href: '/dashboard/audit-report',
-        label: 'Audit Report',
-        icon: 'audit-log',
-        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
-        permissions: ['audit-report.read.all', 'audit-report.read.owndept'],
-      },
-    ],
-  },
-  {
     section: 'Transaction',
     items: [
+      { href: '/expense-requests', label: 'Expense Request', icon: 'expenses', roles: [] },
       { href: '/expenses', label: 'All Expenses', icon: 'expenses', roles: [] },
       {
         href: '/approvals',
@@ -171,19 +191,37 @@ const NAV: NavGroup[] = [
       { href: '/master/activity-types', label: 'Activity Type', icon: 'activity-type', roles: ['ADMINISTRATOR'] },
       { href: '/master/credit-cards', label: 'Corporate Card', icon: 'credit-card', roles: ['ADMINISTRATOR'] },
       { href: '/master/payment-methods', label: 'Payment Method', icon: 'payment-method', roles: ['ADMINISTRATOR'] },
+      { href: '/users', label: 'User', icon: 'user', roles: ['ADMINISTRATOR'] },
       { href: '/master/roles', label: 'Role', icon: 'role', roles: ['ADMINISTRATOR'] },
       { href: '/master/permissions', label: 'Permission', icon: 'permission', roles: ['ADMINISTRATOR'] },
     ],
   },
   {
-    section: 'Import',
-    items: [{ href: '/import', label: 'Excel/CSV/PDF', icon: 'import', roles: ['ADMINISTRATOR'] }],
+    section: 'Reporting',
+    items: [
+      {
+        href: '/dashboard/expense-analytics',
+        label: 'Expense Analytics',
+        icon: 'dashboard',
+        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
+        permissions: ['dashboard.read.all', 'dashboard.read.owndept'],
+      },
+      { href: '/audit-logs', label: 'Audit Log', icon: 'audit-log', roles: ['ADMINISTRATOR'] },
+      {
+        href: '/dashboard/audit-report',
+        label: 'Audit Report',
+        icon: 'audit-log',
+        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
+        permissions: ['audit-report.read.all', 'audit-report.read.owndept'],
+      },
+    ],
   },
+  { section: 'Web Mobile', items: MOBILE_NAV },
   {
     section: 'System',
     items: [
-      { href: '/users', label: 'User', icon: 'user', roles: ['ADMINISTRATOR'] },
       { href: '/approval-levels', label: 'Approval Level', icon: 'approval-level', roles: ['ADMINISTRATOR'] },
+      { href: '/rollback', label: 'Rollback', icon: 'rollback', roles: ['ADMINISTRATOR'] },
     ],
   },
 ];
@@ -203,15 +241,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
     .map((item) => item.href)
     .filter((href) => pathname === href || pathname?.startsWith(`${href}/`))
     .sort((a, b) => b.length - a.length)[0];
+  const activeSection = NAV.find((g) => g.items.some((item) => item.href === activeHref))?.section ?? null;
 
   const [theme, setThemeState] = useState<Theme>('light');
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [viewMode, setViewModeState] = useState<ViewMode | null>(null);
+  const [fabOpen, setFabOpen] = useState(false);
+  // Accordion: only one nav group is expanded at a time. Starts on the group
+  // holding the current page; null = all folded.
+  const [openGroup, setOpenGroup] = useState<string | null>(activeSection);
 
   useEffect(() => {
     setMobileOpen(false);
-  }, [pathname]);
+    setFabOpen(false);
+    if (activeSection) setOpenGroup(activeSection);
+  }, [pathname, activeSection]);
 
   useEffect(() => {
     setThemeState(getTheme());
@@ -238,22 +283,36 @@ export default function AppShell({ children }: { children: ReactNode }) {
     });
   };
 
+  const toggleGroup = (section: string) => {
+    setOpenGroup((prev) => (prev === section ? null : section));
+  };
+
   if (loading) return <SplashLoader message="Loading" />;
   if (!user) return null;
 
   const isVisible = (item: NavItem) =>
-    item.hidePositions?.some((c) => positionMatches(user.position?.code, c)) || (item.hideRoles && hasRole(...item.hideRoles))
+    (item.hidePositions?.some((c) => positionMatches(user.position?.code, c)) || (item.hideRoles && hasRole(...item.hideRoles))
       ? false
       : item.positions
       ? item.positions.some((c) => positionMatches(user.position?.code, c))
-      : (item.roles.length === 0 && !item.permissions) || hasRole(...item.roles) || hasPermission(...(item.permissions ?? []));
+      : (item.roles.length === 0 && !item.permissions) || hasRole(...item.roles) || hasPermission(...(item.permissions ?? []))) &&
+    (!item.requirePermissions || hasRole('ADMINISTRATOR') || hasPermission(...item.requirePermissions));
 
   // Sales is always the phone layout (bottom tab bar, no sidebar). Everyone else
   // picks Mobile or Desktop View; the default follows the device they opened it on.
   const canChooseView = !hasRole('SALES');
   if (canChooseView && !viewMode) return <SplashLoader message="Preparing your workspace" />;
   const bottomNav = !canChooseView || viewMode === 'mobile';
-  const tabs = MOBILE_NAV.filter(isVisible);
+  // "New Expense" / "New Request" stay reachable via the FAB only - the bottom bar drops them to save a slot.
+  const tabs = MOBILE_NAV.filter(isVisible).filter(
+    (item) => item.href !== '/m/expense/new' && item.href !== '/m/expense-requests/new',
+  );
+
+  const newExpenseItem = MOBILE_NAV.find((item) => item.href === '/m/expense/new');
+  const newRequestItem = MOBILE_NAV.find((item) => item.href === '/m/expense-requests/new');
+  const canNewExpense = !!newExpenseItem && isVisible(newExpenseItem);
+  const canNewRequest = !!newRequestItem && isVisible(newRequestItem);
+  const onNewFormPage = pathname === '/m/expense/new' || pathname === '/m/expense-requests/new';
 
   if (bottomNav) {
     return (
@@ -283,6 +342,38 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </div>
         </header>
         <main className="mobile-content">{children}</main>
+        {(canNewExpense || canNewRequest) && !onNewFormPage && (
+          <>
+            {fabOpen && <div className="fab-backdrop" onClick={() => setFabOpen(false)} aria-hidden="true" />}
+            <div className="fab-wrap">
+              {fabOpen && (
+                <div className="fab-menu" role="menu">
+                  {canNewExpense && (
+                    <Link href="/m/expense/new" className="fab-menu-item" role="menuitem" onClick={() => setFabOpen(false)}>
+                      <span className="nav-icon"><NavIcon name="expenses" /></span>
+                      New Expense
+                    </Link>
+                  )}
+                  {canNewRequest && (
+                    <Link href="/m/expense-requests/new" className="fab-menu-item" role="menuitem" onClick={() => setFabOpen(false)}>
+                      <span className="nav-icon"><NavIcon name="expenses" /></span>
+                      New Request
+                    </Link>
+                  )}
+                </div>
+              )}
+              <button
+                type="button"
+                className={`fab${fabOpen ? ' fab-open' : ''}`}
+                onClick={() => setFabOpen((prev) => !prev)}
+                aria-label={fabOpen ? 'Close menu' : 'New'}
+                aria-expanded={fabOpen}
+              >
+                <NavIcon name="plus" />
+              </button>
+            </div>
+          </>
+        )}
         <nav className="bottom-nav" aria-label="Main">
           {tabs.map((item) => (
             <Link key={item.href} href={item.href} className={item.href === activeHref ? 'active' : ''}>
@@ -324,12 +415,26 @@ export default function AppShell({ children }: { children: ReactNode }) {
           {NAV.map((group) => {
             const visibleItems = group.items.filter(isVisible);
             if (visibleItems.length === 0) return null;
+            // Icon-only sidebar has no labels to click, so groups stay open there.
+            const groupClosed = !effectiveCollapsed && openGroup !== group.section;
             return (
               <div key={group.section}>
-                <div className="group-label">
-                  <span>{group.section}</span>
-                </div>
-                {visibleItems.map((item) => (
+                {effectiveCollapsed ? (
+                  <div className="group-label">
+                    <span>{group.section}</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className={`group-label group-toggle${groupClosed ? ' closed' : ''}`}
+                    onClick={() => toggleGroup(group.section)}
+                    aria-expanded={!groupClosed}
+                  >
+                    <span>{group.section}</span>
+                    <span className="group-chevron" aria-hidden="true">▾</span>
+                  </button>
+                )}
+                {!groupClosed && visibleItems.map((item) => (
                   <Link
                     key={item.href}
                     href={item.href}

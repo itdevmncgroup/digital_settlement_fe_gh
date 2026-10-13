@@ -333,6 +333,31 @@ h1, h2, h3 {
   overflow: hidden;
 }
 
+.sidebar .group-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.sidebar .group-toggle:hover {
+  color: var(--text);
+}
+
+.sidebar .group-chevron {
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+
+.sidebar .group-toggle.closed .group-chevron {
+  transform: rotate(-90deg);
+}
+
 .sidebar.collapsed .group-label {
   text-align: center;
   padding: 14px 4px 6px;
@@ -408,6 +433,18 @@ h1, h2, h3 {
   100% {
     transform: translateX(250%);
   }
+}
+
+/* Thumbnail loading state (FileThumb) - fetching the authenticated blob URL
+   takes a moment on mobile data; a quiet pulse beats an empty box. */
+@keyframes file-thumb-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.9; }
+}
+
+.file-thumb-shimmer {
+  background: var(--border);
+  animation: file-thumb-pulse 1.4s ease-in-out infinite;
 }
 
 /* ---------- Surfaces ---------- */
@@ -724,10 +761,8 @@ label {
 /* ---------- Date picker ---------- */
 
 .datepicker-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 40;
+  position: fixed;
+  z-index: 1100; /* above Modal (1000) */
   width: 260px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -858,6 +893,32 @@ label {
   background: var(--login-input-bg);
   border-color: var(--login-input-border);
   color: var(--login-text);
+}
+
+.login-view-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  background: var(--login-input-bg);
+  border: 1px solid var(--login-input-border);
+  border-radius: var(--radius-lg);
+}
+
+.login-view-toggle button {
+  padding: 8px 0;
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  background: transparent;
+  color: var(--login-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-view-toggle button[aria-pressed='true'] {
+  background: var(--gradient-brand);
+  color: #fff;
 }
 
 /* ---------- Mobile / responsive ---------- */

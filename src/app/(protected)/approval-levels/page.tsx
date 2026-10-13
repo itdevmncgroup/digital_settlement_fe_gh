@@ -26,10 +26,11 @@ interface LevelStep {
 interface ApprovalLevel {
   id: string;
   name: string;
-  documentStage: 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT';
+  documentStage: 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT' | 'EXPENSE_REQUEST';
   scopeType: 'ANY' | 'DEPARTMENT';
   departments: { departmentId: string; department: Option }[];
   requestorPositions: { positionId: string; position: Option }[];
+  activityTypes: { activityTypeId: string; activityType: Option }[];
   minAmount: string;
   maxAmount: string | null;
   isActive: boolean;
@@ -50,6 +51,7 @@ export default function ApprovalLevelsPage() {
   const [levels, setLevels] = useState<ApprovalLevel[]>([]);
   const [positions, setPositions] = useState<Option[]>([]);
   const [departments, setDepartments] = useState<Option[]>([]);
+  const [activityTypes, setActivityTypes] = useState<Option[]>([]);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -57,10 +59,11 @@ export default function ApprovalLevelsPage() {
 
   const [form, setForm] = useState({
     name: '',
-    documentStage: 'EXPENSES' as 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT',
+    documentStage: 'EXPENSES' as 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT' | 'EXPENSE_REQUEST',
     scopeType: 'ANY' as 'ANY' | 'DEPARTMENT',
     departmentIds: [] as string[],
     requestorPositionIds: [] as string[],
+    activityTypeIds: [] as string[],
     minAmount: '0',
     maxAmount: '',
     isActive: true,
@@ -73,13 +76,14 @@ export default function ApprovalLevelsPage() {
   const filteredLevels = levels.filter((l) => {
     if (!search) return true;
     const q = search.toLowerCase();
-    return [l.name, ...l.departments.map((d) => d.department.name)].some((v) => v?.toLowerCase().includes(q));
+    return [l.name, ...l.activityTypes.map((a) => a.activityType.name), ...l.departments.map((d) => d.department.name)].some((v) => v?.toLowerCase().includes(q));
   });
   const pagination = usePagination(filteredLevels);
 
   const load = () => {
     api.get<ApprovalLevel[]>('/approval-levels').then(setLevels).catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
     api.get<Option[]>('/positions?active=true').then(setPositions).catch(() => undefined);
+    api.get<Option[]>('/activity-types?active=true').then(setActivityTypes).catch(() => undefined);
     api.get<Option[]>('/departments?active=true').then((res) => setDepartments(sortDepartments(res))).catch(() => undefined);
   };
 
@@ -94,6 +98,7 @@ export default function ApprovalLevelsPage() {
       scopeType: 'ANY',
       departmentIds: [],
       requestorPositionIds: [],
+      activityTypeIds: [],
       minAmount: '0',
       maxAmount: '',
       isActive: true,
@@ -110,6 +115,7 @@ export default function ApprovalLevelsPage() {
       scopeType: l.scopeType,
       departmentIds: l.departments.map((d) => d.departmentId),
       requestorPositionIds: l.requestorPositions.map((p) => p.positionId),
+      activityTypeIds: l.activityTypes.map((a) => a.activityTypeId),
       minAmount: l.minAmount,
       maxAmount: l.maxAmount ?? '',
       isActive: l.isActive,
@@ -122,6 +128,13 @@ export default function ApprovalLevelsPage() {
     setForm((f) => ({
       ...f,
       departmentIds: f.departmentIds.includes(id) ? f.departmentIds.filter((d) => d !== id) : [...f.departmentIds, id],
+    }));
+  };
+
+  const toggleActivityType = (id: string) => {
+    setForm((f) => ({
+      ...f,
+      activityTypeIds: f.activityTypeIds.includes(id) ? f.activityTypeIds.filter((a) => a !== id) : [...f.activityTypeIds, id],
     }));
   };
 
@@ -156,6 +169,7 @@ export default function ApprovalLevelsPage() {
           scopeType: form.scopeType,
           departmentIds: form.scopeType === 'DEPARTMENT' ? form.departmentIds : undefined,
           requestorPositionIds: form.requestorPositionIds,
+          activityTypeIds: form.activityTypeIds, // [] clears the filter
           minAmount: Number(form.minAmount),
           maxAmount: form.maxAmount ? Number(form.maxAmount) : undefined,
           isActive: form.isActive,
@@ -168,6 +182,7 @@ export default function ApprovalLevelsPage() {
           scopeType: form.scopeType,
           departmentIds: form.scopeType === 'DEPARTMENT' ? form.departmentIds : undefined,
           requestorPositionIds: form.requestorPositionIds,
+          activityTypeIds: form.activityTypeIds,
           minAmount: Number(form.minAmount),
           maxAmount: form.maxAmount ? Number(form.maxAmount) : undefined,
           steps,
@@ -227,7 +242,7 @@ export default function ApprovalLevelsPage() {
               <select
                 disabled={!!editingId}
                 value={form.documentStage}
-                onChange={(e) => setForm({ ...form, documentStage: e.target.value as 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT' })}
+                onChange={(e) => setForm({ ...form, documentStage: e.target.value as 'PRE_EVENT' | 'EXPENSES' | 'SETTLEMENT' | 'EXPENSE_REQUEST' })}
               >
                 {/* PRE_EVENT only backs the retired Event/Pre-Event module - not offered for
                     new Approval Levels, but kept as an option here (disabled select, edit-only)
@@ -235,7 +250,30 @@ export default function ApprovalLevelsPage() {
                 {form.documentStage === 'PRE_EVENT' && <option value="PRE_EVENT">Pre-Event (legacy)</option>}
                 <option value="EXPENSES">Expenses</option>
                 <option value="SETTLEMENT">Settlement</option>
+                <option value="EXPENSE_REQUEST">Expense Request</option>
               </select>
+            </div>
+            <div className="form-row">
+              <label>Activity Type (optional — blank = any activity type)</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+                {activityTypes.map((a) => (
+                  <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'normal' }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={form.activityTypeIds.includes(a.id)}
+                      onChange={() => toggleActivityType(a.id)}
+                    />
+                    {a.name}
+                  </label>
+                ))}
+              </div>
+              {form.documentStage === 'EXPENSE_REQUEST' && form.activityTypeIds.length > 0 && (
+                <small style={{ color: 'var(--muted)' }}>
+                  Expenses of these Activity Types in the Level&apos;s Department(s) skip the Expense approval chain
+                  (already approved via the Expense Request); the Settlement chain is unchanged.
+                </small>
+              )}
             </div>
             <div className="form-row">
               <label>Scope</label>
@@ -342,6 +380,7 @@ export default function ApprovalLevelsPage() {
             <tr>
               <th>Name</th>
               <th>Stage</th>
+              <th>Activity Type</th>
               <th>Scope</th>
               <th>Requestor</th>
               <th>Amount Range</th>
@@ -354,7 +393,8 @@ export default function ApprovalLevelsPage() {
             {pagination.pageRows.map((l) => (
               <tr key={l.id}>
                 <td>{l.name}</td>
-                <td>{l.documentStage === 'PRE_EVENT' ? 'Pre-Event' : l.documentStage === 'EXPENSES' ? 'Expenses' : 'Settlement'}</td>
+                <td>{l.documentStage === 'PRE_EVENT' ? 'Pre-Event' : l.documentStage === 'EXPENSES' ? 'Expenses' : l.documentStage === 'EXPENSE_REQUEST' ? 'Expense Request' : 'Settlement'}</td>
+                <td>{l.activityTypes.length > 0 ? l.activityTypes.map((a) => a.activityType.name).join(', ') : 'Any'}</td>
                 <td>{scopeLabel(l)}</td>
                 <td>{requestorLabel(l)}</td>
                 <td>
@@ -371,7 +411,7 @@ export default function ApprovalLevelsPage() {
             ))}
             {filteredLevels.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ color: 'var(--muted)' }}>No Approval Levels configured — submits will be blocked until one exists</td>
+                <td colSpan={9} style={{ color: 'var(--muted)' }}>No Approval Levels configured — submits will be blocked until one exists</td>
               </tr>
             )}
           </tbody>

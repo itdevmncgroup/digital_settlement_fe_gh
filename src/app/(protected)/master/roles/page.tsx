@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useConfirm } from '@/components/ConfirmDialog';
 
 interface Permission {
   id: string;
@@ -18,6 +19,7 @@ interface RoleRow {
 }
 
 export default function RolesPage() {
+  const confirm = useConfirm();
   const [roles, setRoles] = useState<RoleRow[]>([]);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [error, setError] = useState('');
@@ -47,6 +49,22 @@ export default function RolesPage() {
     setEditingId(role.id);
     setForm({ name: role.name, description: role.description ?? '' });
     setShowForm(true);
+  };
+
+  const onDelete = async (role: RoleRow) => {
+    const ok = await confirm({
+      title: 'Delete Role?',
+      message: `"${role.name}" and its permission assignments will be permanently deleted. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setError('');
+    try {
+      await api.del(`/roles/${role.id}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Delete failed');
+    }
   };
 
   const onSubmit = async (e: FormEvent) => {
@@ -157,6 +175,9 @@ export default function RolesPage() {
                 onClick={() => toggleActive(role)}
               >
                 {role.isActive ? 'Deactivate' : 'Activate'}
+              </button>
+              <button className="btn btn-danger" disabled={savingRoleId === role.id} onClick={() => onDelete(role)}>
+                Delete
               </button>
             </div>
           </div>

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import WebMobileGate from '@/components/WebMobileGate';
 import { api, ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/date';
 import { formatCurrency, SkeletonList, StatusBadge, statusTone, TONE_COLOR, toneStyle } from '@/lib/mobileUi';
@@ -31,6 +32,14 @@ interface SettlementRow {
 }
 
 export default function MobileSettlementPage() {
+  return (
+    <WebMobileGate permissions={['webmobile.settlement.read.owndept']}>
+      <MobileSettlementList />
+    </WebMobileGate>
+  );
+}
+
+function MobileSettlementList() {
   const [rows, setRows] = useState<SettlementRow[] | null>(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');

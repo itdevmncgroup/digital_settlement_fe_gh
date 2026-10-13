@@ -9,6 +9,7 @@ import { useToast } from '@/components/ToastProvider';
 import NumberInput from '@/components/NumberInput';
 import LocationPicker from '@/components/LocationPicker';
 import FileThumb from '@/components/FileThumb';
+import LocalFileThumb from '@/components/LocalFileThumb';
 import SplashLoader from '@/components/SplashLoader';
 import { StatusBadge } from '@/lib/mobileUi';
 
@@ -50,6 +51,7 @@ interface CreditCardOption {
 }
 interface ParsedReceipt {
   merchantName: string | null;
+  invoiceDate: string | null;
   subtotal: number | null;
   tax: number | null;
   serviceCharge: number | null;
@@ -75,8 +77,8 @@ interface ExpenseDetail {
   department: Option | null;
   unit: Option;
   activityType: Option;
-  advertiser: Option;
-  brand: BrandOption;
+  advertiser: Option | null; // null: raised from an Agency-only Expense Request
+  brand: BrandOption | null;
   extraAgencies: { agency: Option }[];
   extraAdvertisers: { advertiser: Option }[];
   extraBrands: { brand: BrandOption }[];
@@ -117,62 +119,39 @@ function todayIso() {
 function ExistingFileGrid({ files, downloadPath }: { files: UploadedFileRow[]; downloadPath: (id: string) => string }) {
   if (files.length === 0) return null;
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
-      {files.map((f) => (
-        <FileThumb key={f.id} path={downloadPath(f.id)} fileName={f.fileName} isImage={f.mimeType.startsWith('image/')} />
-      ))}
-    </div>
+    <>
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em', margin: '0 0 6px' }}>
+        Uploaded ({files.length})
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
+        {files.map((f) => (
+          <FileThumb key={f.id} path={downloadPath(f.id)} fileName={f.fileName} isImage={f.mimeType.startsWith('image/')} />
+        ))}
+      </div>
+    </>
   );
 }
 
-function PhotoGrid({ files, onRemove }: { files: File[]; onRemove: (i: number) => void }) {
-  const [urls, setUrls] = useState<string[]>([]);
-  useEffect(() => {
-    const next = files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : ''));
-    setUrls(next);
-    return () => next.forEach((u) => u && URL.revokeObjectURL(u));
-  }, [files]);
+// New, not-yet-uploaded photos - same thumbnail style as ExistingFileGrid
+// (LocalFileThumb mirrors FileThumb) so the row doesn't visibly change once
+// save() finishes uploading and the page reloads from the server.
+function NewPhotoGrid({ files, onRemove }: { files: File[]; onRemove: (i: number) => void }) {
   if (files.length === 0) return null;
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 8 }}>
-      {files.map((f, i) => (
-        <div key={i} style={{ position: 'relative', aspectRatio: '1', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}>
-          {urls[i] ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={urls[i]} alt={f.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-          ) : (
-            <div style={{ padding: 6, fontSize: 11, wordBreak: 'break-all' }}>{f.name}</div>
-          )}
-          <button
-            type="button"
-            onClick={() => onRemove(i)}
-            aria-label="Remove"
-            style={{
-              position: 'absolute',
-              top: 2,
-              right: 2,
-              width: 28,
-              height: 28,
-              borderRadius: 14,
-              border: 'none',
-              background: 'rgba(0,0,0,0.65)',
-              color: '#fff',
-              fontSize: 16,
-              lineHeight: '28px',
-              padding: 0,
-            }}
-          >
-            ×
-          </button>
-        </div>
-      ))}
-    </div>
+    <>
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em', margin: '10px 0 6px' }}>
+        New - not yet saved ({files.length})
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+        {files.map((f, i) => (
+          <LocalFileThumb key={i} file={f} onRemove={() => onRemove(i)} />
+        ))}
+      </div>
+    </>
   );
 }
 
-// lockedIds: rendered without a remove button - used in edit mode so the
-// original primary Advertiser can't be dropped (the backend's PATCH has no
-// way to change it, only add/remove the extras - see ExpenseForm's save()).
+// lockedIds: ids rendered without a remove button.
 function Chips({ items, onRemove, lockedIds = [] }: { items: Option[]; onRemove: (id: string) => void; lockedIds?: string[] }) {
   if (items.length === 0) return null;
   return (
@@ -300,8 +279,15 @@ function InternalParticipantSection({
 export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   const isEdit = !!expenseId;
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, hasRole, hasPermission } = useAuth();
   const toast = useToast();
+
+  // expense.create.all / .owndept (or Admin): key the Expense in on another user's behalf - the
+  // requestor stays that user. Anyone who can't create their own (e.g. Sales Admin) must pick one.
+  const canPickRequestor = !isEdit && (hasRole('ADMINISTRATOR') || hasPermission('webmobile.expense.create.owndept'));
+  const requestorRequired = canPickRequestor && !(hasRole('SALES') || hasPermission('expense.create.own', 'webmobile.expense.create.own'));
+  const [requestors, setRequestors] = useState<{ id: string; name: string; employeeId: string; unitId?: string | null }[]>([]);
+  const [requestorId, setRequestorId] = useState('');
 
   const [units, setUnits] = useState<Option[]>([]);
   const [departments, setDepartments] = useState<Option[]>([]);
@@ -340,6 +326,11 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState('');
   const [notice, setNotice] = useState('');
+  // Expense Date is owned by the user once they've picked it by hand, or once a
+  // scanned invoice has supplied it (first scanned date wins) - an OCR result
+  // must never overwrite either. Until then a scan replaces the default
+  // (today / the loaded Expense's date).
+  const dateLocked = useRef(false);
 
   // Edit mode only: the loaded Expense's current state.
   const [loadingExpense, setLoadingExpense] = useState(isEdit);
@@ -361,18 +352,42 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
     api.get<Option[]>('/agencies?active=true').then(setAgencies).catch(() => undefined);
     api.get<Option[]>('/advertisers?active=true').then(setAdvertisers).catch(() => undefined);
     api.get<PaymentMethodOption[]>('/payment-methods?active=true').then(setPaymentMethods).catch(() => undefined);
-    api
-      .get<Option[]>('/departments/me')
-      .then((d) => {
-        setDepartments(d);
-        if (d.length > 0) setForm((f) => (f.departmentId ? f : { ...f, departmentId: d[0].id }));
-      })
-      .catch(() => undefined);
+    if (canPickRequestor) {
+      api.get<typeof requestors>('/expenses/requestors').then(setRequestors).catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Departments follow the requestor when one is picked (limited to the caller's own unless
+  // Admin / expense.create.all - the API enforces it too), else the caller's own.
   useEffect(() => {
-    if (user?.unitId) setForm((f) => (f.unitId ? f : { ...f, unitId: user.unitId! }));
-  }, [user?.unitId]);
+    if (requestorRequired && !requestorId) {
+      setDepartments([]);
+      return;
+    }
+    let cancelled = false;
+    const limitToMine = !!requestorId && !hasRole('ADMINISTRATOR') && !hasPermission('expense.create.all');
+    (async () => {
+      let d = await api.get<Option[]>(requestorId ? `/departments?salesId=${requestorId}&active=true` : '/departments/me');
+      if (limitToMine) {
+        const mine = await api.get<Option[]>('/departments/me');
+        const mineIds = new Set(mine.map((o) => o.id));
+        d = d.filter((o) => mineIds.has(o.id));
+      }
+      if (cancelled) return;
+      setDepartments(d);
+      if (d.length > 0) setForm((f) => (f.departmentId ? f : { ...f, departmentId: d[0].id }));
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestorId]);
+
+  useEffect(() => {
+    const unitId = requestorId ? requestors.find((r) => r.id === requestorId)?.unitId : requestorRequired ? undefined : user?.unitId;
+    if (unitId) setForm((f) => (f.unitId ? f : { ...f, unitId }));
+  }, [user?.unitId, requestorId, requestors, requestorRequired]);
 
   // Edit mode: load the existing (DRAFT) Expense and pre-fill everything -
   // same shape the create flow builds up interactively. Re-run after a
@@ -398,8 +413,8 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
           merchantName: e.merchantName ?? '',
           location: e.location ?? '',
         });
-        setSelAdvertisers([e.advertiser, ...e.extraAdvertisers.map((x) => x.advertiser)]);
-        setSelBrands([e.brand, ...e.extraBrands.map((x) => x.brand)]);
+        setSelAdvertisers([...(e.advertiser ? [e.advertiser] : []), ...e.extraAdvertisers.map((x) => x.advertiser)]);
+        setSelBrands([...(e.brand ? [e.brand] : []), ...e.extraBrands.map((x) => x.brand)]);
         setSelAgencies(e.extraAgencies.map((x) => x.agency));
         setAgencyParticipants(
           e.participants.filter((p) => p.category === 'AGENCY').map((p) => ({ company: p.company ?? '', name: p.name, position: p.position ?? '' })),
@@ -520,8 +535,9 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   };
 
   // Every picked invoice image is OCR'd right away and prefills merchant/amount
-  // (only fields still empty, so manual edits are never overwritten). OCR is
-  // best-effort - failure never blocks manual entry.
+  // (only fields still empty, so manual edits are never overwritten) and the
+  // Expense Date (the transaction date on the invoice, unless already set - see
+  // dateLocked). OCR is best-effort - failure never blocks manual entry.
   const addInvoices = async (list: FileList | null) => {
     if (!list?.length) return;
     setNotice('');
@@ -535,14 +551,17 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         try {
           const result = (await uploadFile('/invoices/ocr-scan', file)) as ParsedReceipt;
           setOcr((prev) => prev ?? result);
+          const scannedDate = !dateLocked.current ? result.invoiceDate : null;
+          if (scannedDate) dateLocked.current = true;
           setForm((f) => ({
             ...f,
             merchantName: f.merchantName || result.merchantName || '',
             amount: f.amount || (result.total != null ? String(result.total) : ''),
+            expenseDate: scannedDate ?? f.expenseDate,
           }));
           setNotice(
             result.total != null
-              ? 'Invoice scanned - please check the merchant and amount below.'
+              ? `Invoice scanned - please check the merchant, amount${scannedDate ? ' and date' : ''} below.`
               : 'Invoice scanned but no total was found - enter the amount manually.',
           );
         } catch (err) {
@@ -561,8 +580,8 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   // submit endpoint. Once it's no longer DRAFT there's a single "Save
   // Changes" button (isDraft is passed as true, i.e. "don't touch approval").
   const save = async (isDraft: boolean) => {
-    if (selAdvertisers.length === 0 || selBrands.length === 0 || !form.unitId || !form.activityTypeId) {
-      toast.warning('Advertiser, Brand, Unit and Activity Type are required.');
+    if (selAdvertisers.length === 0 || selBrands.length === 0 || !form.activityTypeId) {
+      toast.warning('Advertiser, Brand and Activity Type are required.');
       return;
     }
     // Draft can stay incomplete (filled in later) - required as soon as it's
@@ -571,11 +590,23 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
       toast.warning('Payment method is required.');
       return;
     }
+    // Invoice and activity photo are likewise only enforced on submit (already
+    // saved files in edit mode count, not just the ones picked this session).
+    if (!isDraft) {
+      const invoiceCount = invoices.length + existingInvoices.reduce((n, inv) => n + inv.files.length, 0);
+      if (invoiceCount === 0) {
+        toast.warning('Invoice is required before submitting.');
+        return;
+      }
+      if (photos.length + existingPhotos.length === 0) {
+        toast.warning('Activity photo is required before submitting.');
+        return;
+      }
+    }
     // First pick is the mandatory "primary" Advertiser/Brand; only the rest go
     // in the extra* lists. Agency has no primary field, so every pick is sent.
-    // In edit mode the primary can't be removed from the UI (see Chips
-    // lockedIds below), so selAdvertisers[0]/selBrands[0] always stays the
-    // Expense's original primary - the backend's PATCH has no way to change it.
+    // A DRAFT's primary Advertiser/Brand can be changed too (PATCH accepts
+    // them while status is DRAFT), so edit mode sends them like create does.
     const primaryAdvertiserId = selAdvertisers[0].id;
     const primaryBrandId = selBrands[0].id;
     const participants: { category: string; name: string; position?: string; company?: string; unitId?: string }[] = [
@@ -589,8 +620,17 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         .filter((p) => p.name.trim())
         .map((p) => ({ category: 'EMPLOYEE', name: p.name.trim(), position: p.position.trim() || undefined, unitId: p.unitId || undefined })),
     ];
+    if (requestorRequired && !requestorId) {
+      toast.warning('Pick the requestor this expense is entered for.');
+      return;
+    }
     if (!Number(form.amount)) {
       toast.warning('Amount is required.');
+      return;
+    }
+    // An internal participant is only meaningful with the Unit they belong to.
+    if (internalParticipants.some((p) => (p.name.trim() || p.position.trim()) && !p.unitId)) {
+      toast.warning('Unit is required for every internal participant.');
       return;
     }
     setSaving(true);
@@ -600,14 +640,22 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
       if (isEdit) {
         targetId = expenseId!;
         setProgress('Saving changes...');
+        // Edit mode is DRAFT-only (anything else is read-only), so every field
+        // is sent - including the core ones and the extra*/participants lists,
+        // as [] when emptied so removals actually persist.
         await api.patch(`/expenses/${expenseId}`, {
           expenseDate: form.expenseDate,
           purpose: form.purpose,
           amount: Number(form.amount),
-          extraAgencyIds: selAgencies.length > 0 ? selAgencies.map((a) => a.id) : undefined,
-          extraAdvertiserIds: selAdvertisers.length > 1 ? selAdvertisers.slice(1).map((a) => a.id) : undefined,
-          extraBrandIds: selBrands.length > 1 ? selBrands.slice(1).map((b) => b.id) : undefined,
-          participants: participants.length > 0 ? participants : undefined,
+          departmentId: form.departmentId || undefined,
+          unitId: form.unitId || undefined,
+          activityTypeId: form.activityTypeId,
+          advertiserId: primaryAdvertiserId,
+          brandId: primaryBrandId,
+          extraAgencyIds: selAgencies.map((a) => a.id),
+          extraAdvertiserIds: selAdvertisers.slice(1).map((a) => a.id),
+          extraBrandIds: selBrands.slice(1).map((b) => b.id),
+          participants,
           paymentMethodId: form.paymentMethodId || undefined,
           paymentMethodNote: form.paymentMethodNote || undefined,
           creditCardId: paymentCode === 'CORPORATE_CARD' ? form.creditCardId || undefined : undefined,
@@ -622,6 +670,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         setProgress('Saving expense...');
         const created = await api.post<{ id: string }>('/expenses', {
           isDraft,
+          salesId: requestorId || undefined,
           expenseDate: form.expenseDate,
           purpose: form.purpose,
           amount: Number(form.amount),
@@ -716,12 +765,6 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   const field: React.CSSProperties = { width: '100%', fontSize: 16, minHeight: 44, boxSizing: 'border-box' };
   const bigBtn: React.CSSProperties = { minHeight: 44, fontSize: 15, flex: 1, justifyContent: 'center' };
   const hidden = { display: 'none' } as const;
-  const primaryAdvertiserLock = isEdit && selAdvertisers[0] ? [selAdvertisers[0].id] : [];
-  const primaryBrandId = isEdit ? selBrands[0]?.id : undefined;
-  // Fields the backend's PATCH /expenses/:id can't change at all (see
-  // UpdateExpenseDto) - shown pre-filled but locked instead of hidden, so the
-  // layout stays identical to New Expense.
-  const lockedField = isEdit;
   // Once an Expense leaves DRAFT it's in (or through) the approval chain -
   // opening it from the list/dashboard shows the same layout as New Expense
   // but view-only, instead of allowing edits mid-approval.
@@ -756,7 +799,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
       </h1>
 
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>Invoice</h3>
+        <h3 style={{ marginTop: 0 }}>Invoice *</h3>
         {isEdit && <ExistingFileGrid files={existingInvoices.flatMap((inv) => inv.files)} downloadPath={(id) => `/invoices/files/${id}/download`} />}
         {!readOnly && (
           <>
@@ -770,14 +813,14 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
             </div>
             <input ref={invoiceCamera} type="file" accept="image/*" capture="environment" style={hidden} onChange={(e) => { addInvoices(e.target.files); e.target.value = ''; }} />
             <input ref={invoiceGallery} type="file" accept="image/*,application/pdf" multiple style={hidden} onChange={(e) => { addInvoices(e.target.files); e.target.value = ''; }} />
-            <PhotoGrid files={invoices} onRemove={(i) => setInvoices((p) => p.filter((_, j) => j !== i))} />
+            <NewPhotoGrid files={invoices} onRemove={(i) => setInvoices((p) => p.filter((_, j) => j !== i))} />
             {notice && <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 8 }}>{notice}</div>}
           </>
         )}
       </div>
 
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>Activity photos</h3>
+        <h3 style={{ marginTop: 0 }}>Activity photos *</h3>
         {isEdit && <ExistingFileGrid files={existingPhotos} downloadPath={(id) => `/expenses/photos/${id}/download`} />}
         {!readOnly && (
           <>
@@ -791,7 +834,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
             </div>
             <input ref={photoCamera} type="file" accept="image/*" capture="environment" style={hidden} onChange={(e) => { addPhotos(e.target.files); e.target.value = ''; }} />
             <input ref={photoGallery} type="file" accept="image/*" multiple style={hidden} onChange={(e) => { addPhotos(e.target.files); e.target.value = ''; }} />
-            <PhotoGrid files={photos} onRemove={(i) => setPhotos((p) => p.filter((_, j) => j !== i))} />
+            <NewPhotoGrid files={photos} onRemove={(i) => setPhotos((p) => p.filter((_, j) => j !== i))} />
           </>
         )}
       </div>
@@ -800,24 +843,44 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Details</h3>
 
+        {canPickRequestor && (
+          <div className="form-row">
+            <label>{requestorRequired ? 'Requestor (entry on behalf of) *' : 'Requestor'}</label>
+            <select
+              value={requestorId}
+              onChange={(e) => {
+                setRequestorId(e.target.value);
+                // Department/Unit/Corporate Card belong to the requestor - re-derive them.
+                setForm((f) => ({ ...f, departmentId: '', unitId: '', creditCardId: '' }));
+              }}
+              style={field}
+            >
+              <option value="">{requestorRequired ? 'Select requestor' : `Myself (${user?.name ?? ''})`}</option>
+              {requestors.filter((r) => r.id !== user?.id).map((r) => (
+                <option key={r.id} value={r.id}>{r.name} ({r.employeeId})</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div className="form-row">
-          <label>Date</label>
-          <input type="date" required value={form.expenseDate} onChange={(e) => set({ expenseDate: e.target.value })} style={field} />
+          <label>Date *</label>
+          <input type="date" required value={form.expenseDate} onChange={(e) => { dateLocked.current = true; set({ expenseDate: e.target.value }); }} style={field} />
         </div>
 
         <div className="form-row">
-          <label>Amount (IDR)</label>
+          <label>Amount (IDR) *</label>
           <NumberInput required inputMode="numeric" value={form.amount} onChange={(v) => set({ amount: v })} style={field} placeholder="0" />
         </div>
 
         <div className="form-row">
-          <label>Purpose</label>
+          <label>Purpose *</label>
           <textarea required rows={3} value={form.purpose} onChange={(e) => set({ purpose: e.target.value })} style={field} placeholder="What was this expense for?" />
         </div>
 
         <div className="form-row">
-          <label>Activity type</label>
-          <select required disabled={lockedField} value={form.activityTypeId} onChange={(e) => set({ activityTypeId: e.target.value })} style={field}>
+          <label>Activity type *</label>
+          <select required value={form.activityTypeId} onChange={(e) => set({ activityTypeId: e.target.value })} style={field}>
             <option value="">Select...</option>
             {activityTypes.map((o) => (
               <option key={o.id} value={o.id}>{o.name}</option>
@@ -832,13 +895,13 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         </div>
 
         <div className="form-row">
-          <label>Advertiser (can pick more than one)</label>
-          <Chips items={selAdvertisers} onRemove={removeAdvertiser} lockedIds={primaryAdvertiserLock} />
+          <label>Advertiser * (can pick more than one)</label>
+          <Chips items={selAdvertisers} onRemove={removeAdvertiser} />
           <AddSelect placeholder="Add advertiser..." options={advertisers.filter((a) => !selAdvertisers.some((s) => s.id === a.id))} onPick={addAdvertiser} style={field} />
         </div>
 
         <div className="form-row">
-          <label>Brand (can pick more than one)</label>
+          <label>Brand * (can pick more than one)</label>
           {selAdvertisers.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--muted)' }}>Pick an advertiser first</div>
           ) : brands.length === 0 ? (
@@ -856,7 +919,6 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
                         <input
                           type="checkbox"
                           checked={selBrands.some((s) => s.id === b.id)}
-                          disabled={b.id === primaryBrandId}
                           onChange={() => toggleBrand(b)}
                           style={{ width: 20, height: 20 }}
                         />
@@ -922,7 +984,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         </div>
 
         <div className="form-row">
-          <label>Payment method</label>
+          <label>Payment method *</label>
           <select required value={form.paymentMethodId} onChange={(e) => set({ paymentMethodId: e.target.value, creditCardId: '' })} style={field}>
             <option value="">Select...</option>
             {paymentMethods.map((o) => (
@@ -933,7 +995,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
 
         {paymentCode === 'CORPORATE_CARD' && (
           <div className="form-row">
-            <label>Corporate card</label>
+            <label>Corporate card *</label>
             <select required value={form.creditCardId} onChange={(e) => set({ creditCardId: e.target.value })} style={field}>
               <option value="">Select...</option>
               {cards.map((c) => (
@@ -953,7 +1015,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         {departments.length > 1 && (
           <div className="form-row">
             <label>Department</label>
-            <select disabled={lockedField} value={form.departmentId} onChange={(e) => set({ departmentId: e.target.value, creditCardId: '' })} style={field}>
+            <select value={form.departmentId} onChange={(e) => set({ departmentId: e.target.value, creditCardId: '' })} style={field}>
               {departments.map((o) => (
                 <option key={o.id} value={o.id}>{o.name}</option>
               ))}
@@ -961,17 +1023,6 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
           </div>
         )}
 
-        {!user?.unitId && (
-          <div className="form-row">
-            <label>Unit</label>
-            <select required disabled={lockedField} value={form.unitId} onChange={(e) => set({ unitId: e.target.value })} style={field}>
-              <option value="">Select...</option>
-              {units.map((o) => (
-                <option key={o.id} value={o.id}>{o.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
       </div>
       </fieldset>
 

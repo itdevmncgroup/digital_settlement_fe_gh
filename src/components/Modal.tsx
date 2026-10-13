@@ -1,6 +1,7 @@
 'use client';
 
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ModalProps {
   title: string;
@@ -22,7 +23,14 @@ export default function Modal({ title, onClose, children, wide }: ModalProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  return (
+  // Portaled to <body>: an ancestor with a lingering transform (.content's fade-in-up
+  // animation) would otherwise become the containing block of this position:fixed
+  // overlay, so the popup centered on the page instead of the viewport.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+
+  return createPortal(
     <div
       onClick={onClose}
       style={{
@@ -69,6 +77,7 @@ export default function Modal({ title, onClose, children, wide }: ModalProps) {
         </div>
         <div style={{ padding: 16, overflowY: 'auto', overflowX: 'auto' }}>{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

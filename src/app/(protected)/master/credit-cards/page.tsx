@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { useConfirm } from '@/components/ConfirmDialog';
 import { useAuth } from '@/lib/auth';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
@@ -30,6 +31,7 @@ interface UserOption {
 
 export default function CreditCardsPage() {
   const { hasRole } = useAuth();
+  const confirm = useConfirm();
   const canManage = hasRole('ADMINISTRATOR');
 
   const [cards, setCards] = useState<CreditCard[]>([]);
@@ -83,6 +85,23 @@ export default function CreditCardsPage() {
     setForm({ bank: c.bank, last4: c.last4, userId: c.userId ?? '', isActive: c.isActive, departmentId: c.departmentId ?? '' });
     setEditingUserLabel(c.user?.name ?? '');
     setShowForm(true);
+  };
+
+  const onDelete = async (row: { id: string; }, label: string) => {
+    const ok = await confirm({
+      title: 'Delete Credit Card?',
+      message: `"${label}" will be permanently deleted. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setError('');
+    try {
+      await api.del(`/credit-cards/${row.id}`);
+      if (editingId === row.id) closeForm();
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Delete failed');
+    }
   };
 
   const onSubmit = async (e: FormEvent) => {
@@ -209,9 +228,14 @@ export default function CreditCardsPage() {
                 <td>{c.isActive ? 'Yes' : 'No'}</td>
                 {canManage && (
                   <td>
-                    <button className="btn" onClick={() => startEdit(c)}>
-                      Edit
-                    </button>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="btn" onClick={() => startEdit(c)}>
+                        Edit
+                      </button>
+                      <button className="btn btn-danger" onClick={() => onDelete(c, `${c.bank} •••• ${c.last4}`)}>
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 )}
               </tr>

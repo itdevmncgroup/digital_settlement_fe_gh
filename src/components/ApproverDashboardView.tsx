@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import DepartmentTotalsCard, { DepartmentTotal } from '@/components/DepartmentTotalsCard';
 import { formatCompactCurrency, formatCurrency, SkeletonList, StatTile } from '@/lib/mobileUi';
 
 interface Bucket {
@@ -11,12 +12,17 @@ interface Bucket {
   totalAmount: string | number;
 }
 
+// Drill-down lists behind the tiles (same Department scope and status split as the totals).
+const LIST_IN_PROGRESS = '/m/dashboard/expenses?kind=management&bucket=in-progress';
+const LIST_COMPLETE = '/m/dashboard/expenses?kind=management&bucket=complete';
+
 interface ApproverDashboard {
   departments: { id: string; name: string }[];
   allDepartments?: boolean;
   notComplete: Bucket;
   complete: Bucket;
   pendingApprovalCount: number;
+  byDepartment?: DepartmentTotal[];
 }
 
 // Only tappable when something actually waits on this user.
@@ -71,27 +77,45 @@ export default function ApproverDashboardView({ title, endpoint }: { title: stri
 
           <div className="m-section-title">In progress</div>
           <div className="m-stat-grid">
-            <StatTile label="Transactions" value={data.notComplete.count} icon="layers" tone="var(--warning)" sub="Not complete" />
+            <StatTile
+              label="Transactions"
+              value={data.notComplete.count}
+              icon="layers"
+              tone="var(--warning)"
+              sub="Not complete"
+              href={LIST_IN_PROGRESS}
+            />
             <StatTile
               label="Total amount"
               value={formatCompactCurrency(data.notComplete.totalAmount)}
               icon="clock"
               tone="var(--warning)"
               sub={formatCurrency(data.notComplete.totalAmount)}
+              href={LIST_IN_PROGRESS}
             />
           </div>
 
           <div className="m-section-title">Complete</div>
           <div className="m-stat-grid">
-            <StatTile label="Transactions" value={data.complete.count} icon="check-circle" tone="var(--success)" sub="Complete" />
+            <StatTile
+              label="Transactions"
+              value={data.complete.count}
+              icon="check-circle"
+              tone="var(--success)"
+              sub="Complete"
+              href={LIST_COMPLETE}
+            />
             <StatTile
               label="Total amount"
               value={formatCompactCurrency(data.complete.totalAmount)}
               icon="settlement"
               tone="var(--success)"
               sub={formatCurrency(data.complete.totalAmount)}
+              href={LIST_COMPLETE}
             />
           </div>
+
+          <DepartmentTotalsCard data={data.byDepartment} />
         </>
       )}
     </div>

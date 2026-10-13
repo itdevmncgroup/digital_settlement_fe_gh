@@ -1,7 +1,8 @@
-/* ---------- Approve / Reject action buttons ---------- */
+/* ---------- Approve / Reject / Revise action buttons ---------- */
 
 .btn-approve,
-.btn-reject {
+.btn-reject,
+.btn-revise {
   position: relative;
   gap: 8px;
   padding: 10px 18px;
@@ -12,7 +13,8 @@
 }
 
 .btn-approve::before,
-.btn-reject::before {
+.btn-reject::before,
+.btn-revise::before {
   content: '';
   flex-shrink: 0;
   width: 16px;
@@ -52,15 +54,53 @@
   transform: translateY(-1px);
 }
 
+.btn-revise {
+  --btn-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 10 C4 6 7 4 11 4 C16 4 19.5 7.5 19.5 12 C19.5 16.5 16 20 11.5 20 C8.5 20 6 18.5 4.6 16.2'/%3E%3Cpolyline points='4 5.5 4 10 8.5 10'/%3E%3C/svg%3E");
+  color: #1a1200;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, #d99a1f 0%, #f7b955 55%, #ffd27a 100%);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--warning) 38%, transparent);
+}
+
+.btn-revise:hover {
+  background: linear-gradient(135deg, #b87f12 0%, #d99a1f 55%, #f7b955 100%);
+  border-color: transparent;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--warning) 50%, transparent);
+  transform: translateY(-1px);
+}
+
 .btn-approve:active,
-.btn-reject:active {
+.btn-reject:active,
+.btn-revise:active {
   transform: scale(0.97);
 }
 
 .btn-approve:disabled,
-.btn-reject:disabled {
+.btn-reject:disabled,
+.btn-revise:disabled {
   transform: none;
   box-shadow: none;
+}
+
+/* Approve/Revise/Reject sit three-in-a-row on the Expense detail page too -
+   same fix as the mobile approvals list (.m-page rule in mobile.css): narrow
+   phone widths clip/wrap "Reject" at the desktop padding/font-size. */
+@media (max-width: 480px) {
+  .btn-approve,
+  .btn-reject,
+  .btn-revise {
+    padding: 8px 6px;
+    gap: 4px;
+    font-size: 12px;
+    letter-spacing: 0;
+  }
+
+  .btn-approve::before,
+  .btn-reject::before,
+  .btn-revise::before {
+    width: 13px;
+    height: 13px;
+  }
 }
 
 /* ---------- Approval trail (timeline; replaces the old table) ---------- */

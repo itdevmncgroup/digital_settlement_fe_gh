@@ -8,6 +8,8 @@ import { formatDate, formatDateTime } from '@/lib/date';
 import NumberInput from '@/components/NumberInput';
 import DatePicker from '@/components/DatePicker';
 import FileThumb from '@/components/FileThumb';
+import FileOrCameraInput from '@/components/FileOrCameraInput';
+import LocalFileThumb from '@/components/LocalFileThumb';
 import Modal from '@/components/Modal';
 import { usePrompt } from '@/components/PromptDialog';
 import SplashLoader from '@/components/SplashLoader';
@@ -102,11 +104,12 @@ interface Expense {
   amount: string;
   status: string;
   salesId: string;
+  expenseRequestId: string | null; // set when raised by Corsec from an Expense Request (Karangan Bunga)
   costCenterId: string | null;
   sales: { name: string };
   unit: { name: string };
-  advertiser: { id: string; name: string };
-  brand: { id: string; name: string };
+  advertiser: { id: string; name: string } | null; // null: raised from an Agency-only Expense Request
+  brand: { id: string; name: string } | null;
   activityType: { name: string };
   creditCard: { bank: string; last4: string; user: { id: string; name: string } | null } | null;
   creditCardId: string | null;
@@ -125,7 +128,12 @@ interface Expense {
   photos: PhotoRow[];
   bankTransactions: { id: string; status: string }[];
   isMatched: boolean;
-  settlement: { id: string; settlementNo: string } | null;
+  settlement: {
+    id: string;
+    settlementNo: string;
+    odooSyncStatus: string;
+    odooSyncError: string | null;
+  } | null;
 }
 
 interface TransactionSearchResult {
@@ -152,7 +160,7 @@ interface ApprovalAction {
 interface ApprovalStep {
   stepOrder: number;
   status: string;
-  position: { name: string };
+  position: { code: string; name: string };
   resolvedApprover: { id: string; name: string };
 }
 
@@ -196,15 +204,19 @@ export default function ExpenseDetailPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
-  const [invoiceForm, setInvoiceForm] = useState({ invoiceNumber: '', finalMerchantName: '', finalTotal: '' });
+  // "+ Add Invoice" is upload-only: the file(s) are picked/captured here and uploaded
+  // together with the new Invoice on Save (no number/merchant/total entry).
+  const [invoiceFiles, setInvoiceFiles] = useState<File[]>([]);
+  const [scanningInvoice, setScanningInvoice] = useState(false);
+  const [invoiceScanNote, setInvoiceScanNote] = useState('');
+  const [showPhotoForm, setShowPhotoForm] = useState(false);
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
 
-  const [costCenters, setCostCenters] = useState<Option[]>([]);
   const [categories, setCategories] = useState<Option[]>([]);
   const [editingFields, setEditingFields] = useState(false);
   const [editForm, setEditForm] = useState({
     purpose: '',
     amount: '',
-    costCenterId: '',
     expenseDate: '',
     merchantName: '',
     location: '',
@@ -248,7 +260,6 @@ export default function ExpenseDetailPage() {
   useEffect(load, [id]);
 
   useEffect(() => {
-    api.get<Option[]>('/cost-centers?active=true').then(setCostCenters).catch(() => undefined);
     api.get<Option[]>('/expense-categories?active=true').then(setCategories).catch(() => undefined);
     api.get<Option[]>('/advertisers?active=true').then(setAdvertiserOptions).catch(() => undefined);
     api.get<Option[]>('/agencies?active=true').then(setAgencyOptions).catch(() => undefined);
@@ -264,13 +275,17 @@ export default function ExpenseDetailPage() {
       setBrandOptions([]);
       return;
     }
-    const ids = [expense.advertiser.id, ...editExtraAdvertisers.map((a) => a.id)].join(',');
+    const ids = [expense.advertiser?.id, ...editExtraAdvertisers.map((a) => a.id)].filter(Boolean).join(',');
+    if (!ids) {
+      setBrandOptions([]);
+      return;
+    }
     api
       .get<Option[]>(`/brands?advertiserIds=${ids}&active=true`)
       .then(setBrandOptions)
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expense?.advertiser.id, extraAdvertiserIds]);
+  }, [expense?.advertiser?.id, extraAdvertiserIds]);
 
   // 1 Department = 1 credit card - scope the Corporate Card dropdown to this expense's own Department.
   useEffect(() => {
@@ -286,27 +301,52 @@ export default function ExpenseDetailPage() {
   // expense.edit.owndept is shown optimistically, same caveat as expense.approve.owndept
   // below - the backend's canEditExpense() is authoritative and 403s if the expense's
   // Department isn't actually the actor's.
+  // A PENDING_SALES_ADMIN expense (raised by Corsec) is completed by any Sales Admin of its
+  // Department - the backend (canCompletePendingSalesAdmin) 403s one from another Department.
+  const completesPendingSalesAdmin = expense?.status === 'PENDING_SALES_ADMIN' && hasRole('SALES_ADMIN');
   const canEditFields =
     !!expense &&
-    (isOwnerOrBackOffice || hasPermission('expense.edit.all', 'expense.edit.owndept')) &&
+    (isOwnerOrBackOffice || completesPendingSalesAdmin || hasPermission('expense.edit.all', 'expense.edit.owndept')) &&
     !LOCKED_STATUSES.includes(expense.status);
+  // A Request-linked expense (Karangan Bunga) still waiting on its Sales Admin has no
+  // approval chain yet, but its Level starts at the Sales Admin tier itself - so the
+  // Sales Admin acts on it directly (Approve / Revise / Reject) rather than "submitting"
+  // it and then approving their own step. The backend enters the chain on that action.
+  const salesAdminActsDirectly =
+    !!expense &&
+    expense.status === 'PENDING_SALES_ADMIN' &&
+    !!expense.expenseRequestId &&
+    (hasRole('SALES_ADMIN') || hasRole('ADMINISTRATOR'));
   // Photos/invoices are attached via an edit: no expense.edit.* permission (own -
   // owner only, all/owndept - broader) means no upload controls, even for the owner.
   // ADMIN is exempt. The backend enforces the same rule.
   const canUploadFiles =
     !!expense &&
     (hasRole('ADMINISTRATOR') ||
+      completesPendingSalesAdmin ||
       hasPermission('expense.edit.all', 'expense.edit.owndept') ||
       (isOwner && hasPermission('expense.edit.own'))) &&
     !LOCKED_STATUSES.includes(expense.status);
   const currentStepInfo = approval && approval.status === 'PENDING' ? approval.steps.find((s) => s.stepOrder === approval.currentStep) : null;
   // Only the step's actual resolvedApprover (or an ADMIN override) sees the
-  // Approve/Reject buttons here - deliberately not surfaced for an
+  // Approve/Revise buttons here - deliberately not surfaced for an
   // expense.approve.all/owndept holder too (same call as the Pending Approval
   // list), so after they approve their own step the button doesn't linger for
   // the next approver's step. That permission still works via the backend's
   // assertApprovalOverride if someone needs to act on someone else's step.
-  const canAct = !!currentStepInfo && (currentStepInfo.resolvedApprover?.id === user?.id || hasRole('ADMINISTRATOR'));
+  // The Sales Admin tier (Position SLSADM) belongs to every Sales Admin of the Department,
+  // not just the one the Department mapping resolved - the backend (isSalesAdminOfTier)
+  // lets any of them act on it, and rejects one from another Department.
+  // A Request-linked expense sent back (REVISION) waits for Corsec's "Update Invoice" on the
+  // Expense Request list - the backend refuses to approve it until then.
+  // There is deliberately no Reject button on this page (rejecting happens from the
+  // Pending Approval list).
+  const awaitingCorsecInvoice = expense?.status === 'REVISION' && !!expense.expenseRequestId;
+  const isSalesAdminTier = currentStepInfo?.position.code === 'SLSADM' && hasRole('SALES_ADMIN');
+  const canAct =
+    !!currentStepInfo &&
+    !awaitingCorsecInvoice &&
+    (currentStepInfo.resolvedApprover?.id === user?.id || hasRole('ADMINISTRATOR') || isSalesAdminTier);
   const canMatch = hasRole('ADMINISTRATOR') || hasPermission('expense.match.all', 'expense.match.owndept');
   const matchedTxn = expense?.bankTransactions.find((t) => MATCHED_TXN_STATUSES.includes(t.status)) ?? null;
 
@@ -315,7 +355,6 @@ export default function ExpenseDetailPage() {
     setEditForm({
       purpose: expense.purpose,
       amount: expense.amount,
-      costCenterId: expense.costCenterId ?? '',
       expenseDate: expense.expenseDate.slice(0, 10),
       merchantName: expense.merchantName ?? '',
       location: expense.location ?? '',
@@ -381,7 +420,6 @@ export default function ExpenseDetailPage() {
         purpose: editForm.purpose,
         amount: Number(editForm.amount),
         expenseDate: editForm.expenseDate || undefined,
-        costCenterId: editForm.costCenterId || undefined,
         merchantName: editForm.merchantName || undefined,
         location: editForm.location || undefined,
         paymentMethodId: editForm.paymentMethodId || undefined,
@@ -432,15 +470,17 @@ export default function ExpenseDetailPage() {
     }
   };
 
-  const reject = async () => {
-    const reason = await prompt({ title: 'Reject reason', danger: true });
+  // Sends the expense back exactly one approval tier instead of rejecting it
+  // outright - the owner can then edit and resubmit at that same tier.
+  const revise = async () => {
+    const reason = await prompt({ title: 'Revise reason (send back one tier)', danger: true });
     if (!reason) return;
     setBusy(true);
     try {
-      await api.post(`/approvals/expense/${id}/reject`, { reason });
+      await api.post(`/approvals/expense/${id}/revise`, { reason });
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Reject failed');
+      setError(err instanceof ApiError ? err.message : 'Revise failed');
     } finally {
       setBusy(false);
     }
@@ -515,16 +555,59 @@ export default function ExpenseDetailPage() {
     }
   };
 
+  const resetInvoiceForm = () => {
+    setInvoiceFiles([]);
+    setInvoiceScanNote('');
+    setShowInvoiceForm(false);
+  };
+
+  // Picking invoice images also OCRs them (best-effort, never blocks the upload)
+  // and, when a transaction date is found, puts it in the Edit Expense form's
+  // Expense Date - opening that form first if needed, so the user reviews and
+  // saves it there (nothing is written until they click Save). First scanned
+  // date wins, and a date already changed by hand in the form is left alone.
+  const onInvoiceFilesPicked = async (files: File[]) => {
+    setInvoiceFiles((prev) => [...prev, ...files]);
+    if (!canEditFields || !expense) return;
+    const images = files.filter((f) => f.type.startsWith('image/'));
+    if (images.length === 0) return;
+    setScanningInvoice(true);
+    try {
+      for (const file of images) {
+        try {
+          const result = (await uploadFile('/invoices/ocr-scan', file)) as { invoiceDate: string | null };
+          if (!result.invoiceDate) continue;
+          const original = expense.expenseDate.slice(0, 10);
+          if (!editingFields) startEditFields();
+          setEditForm((f) => (f.expenseDate === original ? { ...f, expenseDate: result.invoiceDate as string } : f));
+          setInvoiceScanNote(`Invoice date ${formatDate(result.invoiceDate)} set in Edit Expense - review and Save.`);
+          break;
+        } catch {
+          // OCR is best-effort: the invoice still uploads normally.
+        }
+      }
+    } finally {
+      setScanningInvoice(false);
+    }
+  };
+
   const addInvoice = async (e: FormEvent) => {
     e.preventDefault();
+    if (invoiceFiles.length === 0) {
+      setError('Upload at least one invoice photo.');
+      return;
+    }
     setBusy(true);
+    setError('');
     try {
-      await api.post(`/expenses/${id}/invoices`, {
-        ...invoiceForm,
-        finalTotal: invoiceForm.finalTotal ? Number(invoiceForm.finalTotal) : undefined,
+      // Total defaults to the Expense amount; it can still be corrected per Invoice afterwards.
+      const invoice = await api.post<{ id: string }>(`/expenses/${id}/invoices`, {
+        finalTotal: expense ? Number(expense.amount) : undefined,
       });
-      setInvoiceForm({ invoiceNumber: '', finalMerchantName: '', finalTotal: '' });
-      setShowInvoiceForm(false);
+      for (const file of invoiceFiles) {
+        await uploadFile(`/invoices/${invoice.id}/files`, file);
+      }
+      resetInvoiceForm();
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Add invoice failed');
@@ -533,10 +616,12 @@ export default function ExpenseDetailPage() {
     }
   };
 
-  const uploadInvoiceFile = async (invoiceId: string, file: File) => {
+  const uploadInvoiceFiles = async (invoiceId: string, files: File[]) => {
     setBusy(true);
     try {
-      await uploadFile(`/invoices/${invoiceId}/files`, file);
+      for (const file of files) {
+        await uploadFile(`/invoices/${invoiceId}/files`, file);
+      }
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Upload failed');
@@ -559,13 +644,16 @@ export default function ExpenseDetailPage() {
     }
   };
 
-  const uploadActivityPhotos = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+  const uploadActivityPhotos = async () => {
+    if (photoFiles.length === 0) return;
     setBusy(true);
+    setError('');
     try {
-      for (const file of Array.from(files)) {
+      for (const file of photoFiles) {
         await uploadFile(`/expenses/${id}/photos`, file);
       }
+      setPhotoFiles([]);
+      setShowPhotoForm(false);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Upload failed');
@@ -597,20 +685,46 @@ export default function ExpenseDetailPage() {
           <span className="badge badge-info">{expense.status}</span>
           <span className={`badge ${expense.isMatched ? 'badge-success' : 'badge-info'}`}>{expense.isMatched ? 'Matched' : 'Not Matched'}</span>
           {expense.settlement && <span className="badge badge-info">{expense.settlement.settlementNo}</span>}
+          {expense.settlement && (
+            <span
+              className={`badge ${
+                expense.settlement.odooSyncStatus === 'SENT'
+                  ? 'badge-success'
+                  : expense.settlement.odooSyncStatus === 'FAILED'
+                  ? 'badge-danger'
+                  : 'badge-warning'
+              }`}
+              title={expense.settlement.odooSyncStatus === 'FAILED' ? expense.settlement.odooSyncError ?? '' : undefined}
+            >
+              Odoo: {expense.settlement.odooSyncStatus}
+            </span>
+          )}
           {canEditFields && (
             <button className="btn" onClick={() => (editingFields ? setEditingFields(false) : startEditFields())}>
               {editingFields ? 'Cancel Edit' : 'Edit'}
             </button>
           )}
-          {canEditFields && expense.status === 'DRAFT' && (
-            <button
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={submitDraft}
-              title="Send this draft into the approval chain"
-            >
-              {busy ? 'Submitting...' : 'Submit for Approval'}
-            </button>
+          {salesAdminActsDirectly || canAct ? (
+            <>
+              <button className="btn btn-approve" disabled={busy} onClick={approve}>
+                Approve
+              </button>
+              <button className="btn btn-revise" disabled={busy} onClick={revise}>
+                Revise
+              </button>
+            </>
+          ) : (
+            canEditFields &&
+            (expense.status === 'DRAFT' || expense.status === 'PENDING_SALES_ADMIN') && (
+              <button
+                className="btn btn-primary"
+                disabled={busy}
+                onClick={submitDraft}
+                title={expense.status === 'DRAFT' ? 'Send this draft into the approval chain' : 'Send this completed expense into the approval chain'}
+              >
+                {busy ? 'Submitting...' : 'Submit for Approval'}
+              </button>
+            )
           )}
         </div>
       </div>
@@ -676,17 +790,6 @@ export default function ExpenseDetailPage() {
                   {editLocating ? '...' : '📍'}
                 </button>
               </div>
-            </div>
-            <div className="form-row">
-              <label>Cost Center (optional)</label>
-              <select value={editForm.costCenterId} onChange={(e) => setEditForm({ ...editForm, costCenterId: e.target.value })}>
-                <option value="">-</option>
-                {costCenters.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
             </div>
             <div className="form-row">
               <label>Payment Method</label>
@@ -786,7 +889,7 @@ export default function ExpenseDetailPage() {
                 <select value="" onChange={(e) => e.target.value && addExtraAdvertiser(e.target.value)}>
                   <option value="">+ Add an advertiser</option>
                   {advertiserOptions
-                    .filter((a) => a.id !== expense.advertiser.id && !editExtraAdvertisers.some((s) => s.id === a.id))
+                    .filter((a) => a.id !== expense.advertiser?.id && !editExtraAdvertisers.some((s) => s.id === a.id))
                     .map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.name}
@@ -797,7 +900,7 @@ export default function ExpenseDetailPage() {
             </div>
 
             <div>
-              <label style={{ display: 'block', marginBottom: 8 }}>Additional Brands (beyond the primary Brand {expense.brand.name})</label>
+              <label style={{ display: 'block', marginBottom: 8 }}>Additional Brands (beyond the primary Brand {expense.brand?.name ?? '-'})</label>
               {editExtraBrands.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                   {editExtraBrands.map((b) => (
@@ -828,14 +931,14 @@ export default function ExpenseDetailPage() {
                 }}
               >
                 {brandOptions
-                  .filter((b) => b.id !== expense.brand.id)
+                  .filter((b) => b.id !== expense.brand?.id)
                   .map((b) => (
                     <label key={b.id} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
                       <input type="checkbox" checked={editExtraBrands.some((sb) => sb.id === b.id)} onChange={() => toggleExtraBrand(b)} />
                       {b.name}
                     </label>
                   ))}
-                {brandOptions.filter((b) => b.id !== expense.brand.id).length === 0 && (
+                {brandOptions.filter((b) => b.id !== expense.brand?.id).length === 0 && (
                   <span style={{ color: 'var(--muted)', fontSize: 12 }}>No other brands under the selected advertiser(s)</span>
                 )}
               </div>
@@ -916,7 +1019,7 @@ export default function ExpenseDetailPage() {
           </div>
 
           <button className="btn btn-primary" type="submit" disabled={busy || !editForm.expenseDate} style={{ marginTop: 16 }}>
-            {busy ? 'Saving...' : 'Save Changes'}
+            {busy ? 'Saving...' : expense.status === 'REVISION' ? 'Resubmit' : 'Save Changes'}
           </button>
         </form>
       ) : (
@@ -998,18 +1101,6 @@ export default function ExpenseDetailPage() {
             </div>
           )}
 
-          <div style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {canAct && (
-              <>
-                <button className="btn btn-approve" disabled={busy} onClick={approve}>
-                  Approve ({currentStepInfo?.position.name})
-                </button>
-                <button className="btn btn-reject" disabled={busy} onClick={reject}>
-                  Reject
-                </button>
-              </>
-            )}
-          </div>
         </div>
       )}
 
@@ -1017,7 +1108,7 @@ export default function ExpenseDetailPage() {
         <div className="toolbar">
           <h3 style={{ margin: 0 }}>Invoices</h3>
           {canUploadFiles && (
-            <button className="btn" onClick={() => setShowInvoiceForm((v) => !v)}>
+            <button className="btn" onClick={() => (showInvoiceForm ? resetInvoiceForm() : setShowInvoiceForm(true))}>
               {showInvoiceForm ? 'Cancel' : '+ Add Invoice'}
             </button>
           )}
@@ -1025,22 +1116,26 @@ export default function ExpenseDetailPage() {
 
         {showInvoiceForm && (
           <form onSubmit={addInvoice} style={{ marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
-            <div className="form-grid">
-              <div className="form-row">
-                <label>Invoice Number</label>
-                <input value={invoiceForm.invoiceNumber} onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceNumber: e.target.value })} />
-              </div>
-              <div className="form-row">
-                <label>Merchant Name</label>
-                <input value={invoiceForm.finalMerchantName} onChange={(e) => setInvoiceForm({ ...invoiceForm, finalMerchantName: e.target.value })} />
-              </div>
-              <div className="form-row">
-                <label>Total Amount</label>
-                <NumberInput value={invoiceForm.finalTotal} onChange={(v) => setInvoiceForm({ ...invoiceForm, finalTotal: v })} />
-              </div>
+            <div className="form-row">
+              <label>Foto Invoice * (image/pdf, bisa lebih dari 1)</label>
+              <FileOrCameraInput
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                cameraTitle="Scan Invoice"
+                disabled={busy}
+                onFiles={onInvoiceFilesPicked}
+              />
+              {scanningInvoice && <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>Scanning invoice...</div>}
+              {invoiceScanNote && <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{invoiceScanNote}</div>}
+              {invoiceFiles.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                  {invoiceFiles.map((f, i) => (
+                    <LocalFileThumb key={`${f.name}-${i}`} file={f} onRemove={() => setInvoiceFiles((prev) => prev.filter((_, idx) => idx !== i))} />
+                  ))}
+                </div>
+              )}
             </div>
-            <button className="btn btn-primary" type="submit" disabled={busy} style={{ marginTop: 12 }}>
-              Save Invoice
+            <button className="btn btn-primary" type="submit" disabled={busy || invoiceFiles.length === 0} style={{ marginTop: 12 }}>
+              {busy ? 'Saving...' : 'Save Invoice'}
             </button>
           </form>
         )}
@@ -1087,15 +1182,14 @@ export default function ExpenseDetailPage() {
               </div>
             )}
             {canUploadFiles && (
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp,application/pdf"
-                style={{ marginTop: 8 }}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) uploadInvoiceFile(inv.id, file);
-                }}
-              />
+              <div style={{ marginTop: 8 }}>
+                <FileOrCameraInput
+                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  cameraTitle="Scan Invoice"
+                  disabled={busy}
+                  onFiles={(files) => uploadInvoiceFiles(inv.id, files)}
+                />
+              </div>
             )}
           </div>
         ))}
@@ -1103,15 +1197,39 @@ export default function ExpenseDetailPage() {
       </div>
 
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>Foto Kegiatan</h3>
-        {canUploadFiles && (
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            multiple
-            disabled={busy}
-            onChange={(e) => uploadActivityPhotos(e.target.files)}
-          />
+        <div className="toolbar">
+          <h3 style={{ margin: 0 }}>Foto Kegiatan</h3>
+          {canUploadFiles && (
+            <button
+              className="btn"
+              onClick={() => {
+                if (showPhotoForm) setPhotoFiles([]);
+                setShowPhotoForm((v) => !v);
+              }}
+            >
+              {showPhotoForm ? 'Cancel' : '+ Add Foto Kegiatan'}
+            </button>
+          )}
+        </div>
+        {showPhotoForm && (
+          <div style={{ marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
+            <FileOrCameraInput
+              accept="image/jpeg,image/png,image/webp"
+              cameraTitle="Foto Kegiatan"
+              disabled={busy}
+              onFiles={(files) => setPhotoFiles((prev) => [...prev, ...files])}
+            />
+            {photoFiles.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                {photoFiles.map((f, i) => (
+                  <LocalFileThumb key={`${f.name}-${i}`} file={f} onRemove={() => setPhotoFiles((prev) => prev.filter((_, idx) => idx !== i))} />
+                ))}
+              </div>
+            )}
+            <button className="btn btn-primary" disabled={busy || photoFiles.length === 0} style={{ marginTop: 12 }} onClick={uploadActivityPhotos}>
+              {busy ? 'Uploading...' : `Upload (${photoFiles.length})`}
+            </button>
+          </div>
         )}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
           {expense.photos.map((p) => (
