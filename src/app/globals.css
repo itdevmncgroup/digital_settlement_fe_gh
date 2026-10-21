@@ -672,10 +672,102 @@ label {
   margin-bottom: 4px;
 }
 
+/* Multi-column field row for wide popups; collapses to one column on small screens. */
+.form-cols-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 16px;
+  align-items: start;
+}
+
+.form-cols-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 820px) {
+  .form-cols-3,
+  .form-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Titled group of fields inside a wide popup (e.g. Create Expense Request). */
+.form-section {
+  padding-top: 14px;
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.form-section:first-child {
+  padding-top: 0;
+  margin-top: 0;
+  border-top: none;
+}
+
+.form-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.form-section .form-row {
+  margin-bottom: 8px;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 16px;
+}
+
+/* Checkbox pick-lists (Brand, Role permissions). The global `input` rule above
+   is full width with padding, which blows a checkbox up - reset it here, and let
+   long unbreakable text (e.g. dotted permission codes) wrap instead of being clipped. */
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px 16px;
+}
+
+.check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.check-item input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 1px 0 0;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
 /* ---------- Badges ---------- */
@@ -919,6 +1011,75 @@ label {
 .login-view-toggle button[aria-pressed='true'] {
   background: var(--gradient-brand);
   color: #fff;
+}
+
+/* Forgot / reset password (public pages opened from an email on a phone) */
+
+.auth-mobile-page {
+  align-items: flex-start;
+  padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+}
+
+.auth-mobile-card {
+  margin-top: 6vh;
+  padding: 28px 22px;
+}
+
+.auth-mobile-logo {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: var(--gradient-brand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  margin-bottom: 16px;
+  box-shadow: 0 6px 18px rgba(109, 123, 250, 0.35);
+  color: #fff;
+}
+
+.auth-mobile-subtitle {
+  color: var(--login-muted);
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.auth-mobile-card input:not([type='checkbox']) {
+  font-size: 16px; /* below 16px iOS Safari zooms the page on focus */
+  min-height: 46px;
+}
+
+.auth-mobile-submit {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 20px;
+  justify-content: center;
+  align-items: center;
+  text-decoration: none;
+}
+
+.auth-mobile-link {
+  display: block;
+  margin-top: 16px;
+  text-align: center;
+  color: var(--login-primary);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.auth-mobile-show {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 14px;
+}
+
+.auth-mobile-show input {
+  width: auto;
+  margin: 0;
 }
 
 /* ---------- Mobile / responsive ---------- */

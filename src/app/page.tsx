@@ -27,16 +27,34 @@ export default function RootPage() {
       ['/m/profile', ['webmobile.profile.read.own']],
     ].find(([, perms]) => hasPermission(...(perms as string[])))?.[0] as string | undefined;
 
-    if (canMobileDashboard && positionMatches(user.position?.code, 'HEAD-POD')) {
+    // First desktop dashboard the user may open (same role/permission gate as the sidebar in AppShell).
+    // Expense first: it is the long-standing desktop landing page, Executive is still a placeholder.
+    // dashboard.read.* are the legacy all-dashboards permissions; each dashboard also has its own.
+    const isBackOffice = hasRole('ADMINISTRATOR', 'MANAGEMENT');
+    const desktopDashboard = (
+      [
+        ['/expense-dashboard', 'dashboard.expense.read.owndept'],
+        ['/dashboard/settlement', 'dashboard.settlement.read.owndept'],
+        ['/dashboard/executive', 'dashboard.executive.read.owndept'],
+      ] as const
+    ).find(([, own]) => isBackOffice || hasPermission('dashboard.read.all', 'dashboard.read.owndept', own))?.[0];
+
+    // The View chosen on the login screen decides which dashboard a user holding both kinds lands
+    // on. SALES is locked to the phone layout, so it never takes the desktop branch.
+    const viewMode = resolveViewMode();
+
+    if (desktopDashboard && viewMode === 'desktop' && !hasRole('SALES')) {
+      router.replace(desktopDashboard);
+    } else if (canMobileDashboard && positionMatches(user.position?.code, 'HEAD-POD')) {
       router.replace('/m/dashboard-head-dept');
     } else if (canMobileDashboard && positionMatches(user.position?.code, 'CO-CSO')) {
       router.replace('/m/dashboard-co-cso');
-    } else if (canMobileDashboard && hasRole('MANAGEMENT') && !hasRole('ADMIN')) {
+    } else if (canMobileDashboard && hasRole('MANAGEMENT') && !hasRole('ADMINISTRATOR')) {
       router.replace('/m/dashboard-management');
-    } else if (canMobileDashboard && (hasRole('SALES') || (hasRole('ADMIN', 'MANAGEMENT') && resolveViewMode() === 'mobile'))) {
+    } else if (canMobileDashboard && (hasRole('SALES') || viewMode === 'mobile')) {
       router.replace('/m/dashboard');
-    } else if (hasRole('ADMIN', 'MANAGEMENT')) {
-      router.replace('/expense-dashboard');
+    } else if (desktopDashboard) {
+      router.replace(desktopDashboard);
     } else if (canMobileDashboard) {
       // Granted the web-mobile dashboard (e.g. Sales Customer Service) without
       // the SALES role - land there instead of the desktop Expenses list.

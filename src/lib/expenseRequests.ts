@@ -22,6 +22,7 @@ export interface ExpenseRequest {
   requestBudget: string | null;
   greetingText: string;
   sendDate: string;
+  recipient: string | null;
   recipientAddress: string;
   logo: string | null;
   status: ExpenseRequestStatus;

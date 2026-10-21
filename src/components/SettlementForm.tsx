@@ -51,6 +51,9 @@ interface AllocationRow {
   curr: string;
 }
 
+// The Unit split is a share of the Settlement total - it can never exceed 100%.
+const MAX_ALLOCATION_PERCENT = 100;
+
 // RE101 product code per Unit (BRD mapping) - shown readonly next to the Unit.
 const PRODUCT_BY_UNIT_CODE: Record<string, string> = {
   RCTI: 'RE101-04.001',
@@ -74,6 +77,7 @@ interface GeneratedExpenseRow {
   purpose: string;
   amount: string;
   status: string;
+  department?: { id: string; name: string };
   sales: { name: string };
 }
 
@@ -127,6 +131,11 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
 
   const [genActivityTypeIds, setGenActivityTypeIds] = useState<string[]>([]);
   const [genDepartmentId, setGenDepartmentId] = useState('');
+  // Karangan Bunga only: several Departments can be picked, purely as a filter on
+  // where the Expenses come from - the Settlement itself stays in the logged-in
+  // user's own Department (resolved server-side).
+  const [genDepartmentIds, setGenDepartmentIds] = useState<string[]>([]);
+  const [myDepartments, setMyDepartments] = useState<DepartmentOption[]>([]);
   const [genFromDate, setGenFromDate] = useState(defaultFromDate);
   const [genToDate, setGenToDate] = useState(defaultToDate);
   const [genPaymentMethodGroup, setGenPaymentMethodGroup] = useState<'CORPORATE_CARD' | 'NON_CORPORATE_CARD' | ''>('');
@@ -146,11 +155,38 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
   const isParcelOnly =
     genActivityTypeIds.length === 1 && activityTypeOptions.find((a) => a.id === genActivityTypeIds[0])?.name === 'Parcel/Bingkisan';
 
+  // Karangan Bunga Settlements can span more than one Department, and any user may
+  // pick any Department - even one holding a single Department of their own.
+  const isKaranganBunga =
+    genActivityTypeIds.length > 0 &&
+    genActivityTypeIds.every((id) => activityTypeOptions.find((a) => a.id === id)?.name === 'Karangan Bunga');
+
+  // Departments the search/credit-card/description below are scoped to.
+  const searchDepartmentIds = isKaranganBunga ? genDepartmentIds : genDepartmentId ? [genDepartmentId] : [];
+  const searchDepartmentKey = searchDepartmentIds.join(',');
+
   useEffect(() => {
-    const path = canManage || isParcelOnly ? '/departments?active=true' : '/departments/me';
+    const path = canManage || isParcelOnly || isKaranganBunga ? '/departments?active=true' : '/departments/me';
     api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canManage, isParcelOnly]);
+  }, [canManage, isParcelOnly, isKaranganBunga]);
+
+  useEffect(() => {
+    api.get<DepartmentOption[]>('/departments/me').then(setMyDepartments).catch(() => undefined);
+  }, []);
+
+  // The Department a Karangan Bunga Settlement is filed under: the user's own one
+  // (preferring one of the picked filter Departments) - same rule as the backend.
+  const ownDepartment = myDepartments.find((d) => genDepartmentIds.includes(d.id)) ?? myDepartments[0];
+
+  // Entering Karangan Bunga mode keeps the single Department already picked.
+  useEffect(() => {
+    if (isKaranganBunga && genDepartmentIds.length === 0 && genDepartmentId) setGenDepartmentIds([genDepartmentId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isKaranganBunga]);
+
+  const toggleDepartment = (id: string) =>
+    setGenDepartmentIds((prev) => (prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]));
 
   useEffect(() => {
     api.get<ActivityTypeOption[]>('/activity-types?active=true').then(setActivityTypeOptions).catch(() => undefined);
@@ -163,19 +199,21 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
     api.get<UnitOption[]>('/units?active=true').then(setUnitOptions).catch(() => undefined);
   }, []);
 
-  // Corporate Card options for the picked Department - a Department can hold more
+  // Corporate Card options for the picked Department(s) - a Department can hold more
   // than one card, so this narrows generate()/createFromSelection() to one of them.
   useEffect(() => {
     setGenCreditCardId('');
-    if (!genDepartmentId || genPaymentMethodGroup !== 'CORPORATE_CARD') {
+    if (searchDepartmentIds.length === 0 || genPaymentMethodGroup !== 'CORPORATE_CARD') {
       setCreditCardOptions([]);
       return;
     }
-    api
-      .get<CreditCardOption[]>(`/credit-cards?departmentId=${genDepartmentId}&active=true`)
-      .then(setCreditCardOptions)
-      .catch(() => setCreditCardOptions([]));
-  }, [genDepartmentId, genPaymentMethodGroup]);
+    Promise.all(
+      searchDepartmentIds.map((id) =>
+        api.get<CreditCardOption[]>(`/credit-cards?departmentId=${id}&active=true`).catch(() => [] as CreditCardOption[]),
+      ),
+    ).then((lists) => setCreditCardOptions(lists.flat()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchDepartmentKey, genPaymentMethodGroup]);
 
   // Sum of the Expenses the user has checked in the preview table - what each
   // allocation row's Original/Unit/Total Price is a percentage of. Recomputed
@@ -196,7 +234,10 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
   //   Corporate Card:     "[CREDIT CARD] [****-{last4}] [{DEPT NAME}] [{DATE_FROM} - {DATE_TO}] ({UNIT_NAME} {persentase}%)"
   //   Non Corporate Card: "[NON CREDIT CARD] [{DEPT NAME}] [{DATE_FROM} - {DATE_TO}] ({UNIT_NAME} {persentase}%)"
   const buildAllocationDescription = (unitCode: string, percentage: string) => {
-    const deptName = (departmentOptions.find((d) => d.id === genDepartmentId)?.name ?? existing?.department.name ?? '').toUpperCase();
+    const pickedName = departmentOptions.find((d) => d.id === searchDepartmentIds[0])?.name;
+    const deptName = (
+      (isKaranganBunga ? ownDepartment?.name : undefined) ?? pickedName ?? existing?.department.name ?? ''
+    ).toUpperCase();
     const isCard = genPaymentMethodGroup === 'CORPORATE_CARD';
     const last4 = creditCardOptions.find((c) => c.id === genCreditCardId)?.last4 ?? 'NULL';
     // YYYY-MM-DD (date input value) -> DD-MMM-YYYY, by string split so no timezone shift.
@@ -254,7 +295,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
       }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [genPaymentMethodGroup, genCreditCardId, genDepartmentId, genFromDate, genToDate, departmentOptions, creditCardOptions]);
+  }, [genPaymentMethodGroup, genCreditCardId, searchDepartmentKey, genFromDate, genToDate, departmentOptions, creditCardOptions, ownDepartment?.id]);
 
   // Percentage edits feed straight back into the description template too
   // (the "(UNIT %)" tail), as long as the description is still auto-generated.
@@ -267,6 +308,10 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
         return { ...r, percentage, description: nextDescription, autoDescription: nextDescription };
       }),
     );
+
+  const totalPercentage = allocationRows.reduce((sum, r) => sum + (Number(r.percentage) || 0), 0);
+  const overAllocated = Math.round(totalPercentage * 100) / 100 > MAX_ALLOCATION_PERCENT;
+  const overAllocatedMessage = `Total persentase ${Math.round(totalPercentage * 100) / 100}% - tidak boleh lebih dari ${MAX_ALLOCATION_PERCENT}%.`;
 
   const allocationAmount = (row: AllocationRow) => (selectedExpensesTotal * (Number(row.percentage) || 0)) / 100;
 
@@ -330,6 +375,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
     paymentMethodGroup: 'CORPORATE_CARD' | 'NON_CORPORATE_CARD',
     creditCardId?: string,
     activityTypeIds?: string[],
+    departmentIds?: string[],
   ) => {
     setSearching(true);
     setGenerateError('');
@@ -342,6 +388,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
         paymentMethodGroup,
         creditCardId: paymentMethodGroup === 'CORPORATE_CARD' ? creditCardId || undefined : undefined,
         activityTypeIds: activityTypeIds && activityTypeIds.length > 0 ? activityTypeIds : undefined,
+        departmentIds: departmentIds && departmentIds.length > 1 ? departmentIds : undefined,
       });
       if (current) {
         const memberIds = new Set(current.expenses.map((e) => e.id));
@@ -361,7 +408,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
   };
 
   const searchExpenses = async () => {
-    if (!genDepartmentId) {
+    if (searchDepartmentIds.length === 0) {
       setGenerateError('Pilih Department terlebih dahulu.');
       return;
     }
@@ -369,7 +416,16 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
       setGenerateError('Pilih Metode Pembayaran terlebih dahulu.');
       return;
     }
-    await runSearch(existing, genDepartmentId, genFromDate, genToDate, genPaymentMethodGroup, genCreditCardId, genActivityTypeIds);
+    await runSearch(
+      existing,
+      searchDepartmentIds[0],
+      genFromDate,
+      genToDate,
+      genPaymentMethodGroup,
+      genCreditCardId,
+      genActivityTypeIds,
+      searchDepartmentIds,
+    );
   };
 
   const toggleSelectedExpense = (id: string) =>
@@ -409,6 +465,10 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
   // Edit mode's "Save Changes" - replaces the draft's Expenses + allocations.
   const saveChanges = async () => {
     if (!settlementId || selectedExpenseIds.size === 0) return;
+    if (overAllocated) {
+      setGenerateError(overAllocatedMessage);
+      return;
+    }
     setCreatingSettlement(true);
     setGenerateError('');
     try {
@@ -426,11 +486,18 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
 
   // Also doubles as "No" on the duplicate-settlement prompt.
   const createNewSettlement = async () => {
+    if (overAllocated) {
+      setGenerateError(overAllocatedMessage);
+      return;
+    }
     setCreatingSettlement(true);
     setGenerateError('');
     try {
       await api.post('/settlements/from-selection', {
-        departmentId: genDepartmentId,
+        // Karangan Bunga: the picked Departments only say where the Expenses may
+        // come from; the backend files the Settlement under the user's own one.
+        departmentId: searchDepartmentIds[0],
+        departmentIds: isKaranganBunga ? searchDepartmentIds : undefined,
         expenseIds: Array.from(selectedExpenseIds),
         paymentMethodGroup: genPaymentMethodGroup,
         creditCardId: genPaymentMethodGroup === 'CORPORATE_CARD' ? genCreditCardId || undefined : undefined,
@@ -507,15 +574,42 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
             </div>
           </div>
           <div className="form-row">
-            <label>Department</label>
-            <select value={genDepartmentId} disabled={isEdit} onChange={(e) => setGenDepartmentId(e.target.value)}>
-              <option value="">Select Department</option>
-              {departmentOptions.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
+            <label>{isKaranganBunga ? 'Department (bisa lebih dari 1)' : 'Department'}</label>
+            {isKaranganBunga && !isEdit ? (
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '4px 16px',
+                  maxHeight: 80,
+                  overflowY: 'auto',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  padding: 8,
+                }}
+              >
+                {departmentOptions.map((d) => (
+                  <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'normal' }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={genDepartmentIds.includes(d.id)}
+                      onChange={() => toggleDepartment(d.id)}
+                    />
+                    {d.name}
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <select value={genDepartmentId} disabled={isEdit} onChange={(e) => setGenDepartmentId(e.target.value)}>
+                <option value="">Select Department</option>
+                {departmentOptions.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div className="form-row">
             <label>From</label>
@@ -540,8 +634,12 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
           {genPaymentMethodGroup === 'CORPORATE_CARD' && (
             <div className="form-row">
               <label>Corporate Card</label>
-              <select value={genCreditCardId} disabled={isEdit || !genDepartmentId} onChange={(e) => setGenCreditCardId(e.target.value)}>
-                <option value="">{genDepartmentId ? 'All Corporate Cards' : 'Select a Department first'}</option>
+              <select
+                value={genCreditCardId}
+                disabled={isEdit || searchDepartmentIds.length === 0}
+                onChange={(e) => setGenCreditCardId(e.target.value)}
+              >
+                <option value="">{searchDepartmentIds.length > 0 ? 'All Corporate Cards' : 'Select a Department first'}</option>
                 {creditCardOptions.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.bank} •••• {c.last4} ({c.user?.name ?? '-'})
@@ -582,6 +680,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                       </th>
                       <th>Expense No</th>
                       <th>Date</th>
+                      {isKaranganBunga && <th>Department</th>}
                       <th>Sales</th>
                       <th>Purpose</th>
                       <th>Amount</th>
@@ -603,6 +702,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                           <Link href={`/expenses/${e.id}`}>{e.expenseNo}</Link>
                         </td>
                         <td>{formatDate(e.expenseDate)}</td>
+                        {isKaranganBunga && <td>{e.department?.name ?? '-'}</td>}
                         <td>{e.sales?.name}</td>
                         <td>{e.purpose}</td>
                         <td>{formatCurrency(e.amount)}</td>
@@ -673,6 +773,12 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                       </div>
                     );
                   })}
+                  <div
+                    style={{ marginTop: 8, fontSize: 12 }}
+                    className={overAllocated ? 'error-text' : undefined}
+                  >
+                    {overAllocated ? overAllocatedMessage : `Total persentase: ${Math.round(totalPercentage * 100) / 100}%`}
+                  </div>
                 </div>
                 )}
 
@@ -681,6 +787,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                     className="btn btn-primary"
                     disabled={
                       creatingSettlement ||
+                      overAllocated ||
                       selectedExpenseIds.size === 0 ||
                       (existing?.status !== 'DRAFT_SETTLEMENT' && existing?.status !== 'REVISION')
                     }
@@ -703,7 +810,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                       <button className="btn btn-primary" disabled={creatingSettlement} onClick={addSelectionToExisting}>
                         Yes
                       </button>
-                      <button className="btn" disabled={creatingSettlement} onClick={createNewSettlement}>
+                      <button className="btn" disabled={creatingSettlement || overAllocated} onClick={createNewSettlement}>
                         No
                       </button>
                     </div>
@@ -712,7 +819,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                   selectedExpenseIds.size > 0 && (
                     <button
                       className="btn btn-primary"
-                      disabled={creatingSettlement}
+                      disabled={creatingSettlement || overAllocated}
                       style={{ marginTop: 12 }}
                       onClick={handleGenerateSettlement}
                     >

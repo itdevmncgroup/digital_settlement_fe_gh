@@ -58,6 +58,7 @@ export default function ExpenseRequestForm({ request }: { request?: ExpenseReque
   const [budget, setBudget] = useState(request?.requestBudget ? String(Math.round(Number(request.requestBudget))) : '');
   const [greetingText, setGreetingText] = useState(request?.greetingText ?? '');
   const [sendDate, setSendDate] = useState(request?.sendDate ? request.sendDate.slice(0, 10) : '');
+  const [recipient, setRecipient] = useState(request?.recipient ?? '');
   const [recipientAddress, setRecipientAddress] = useState(request?.recipientAddress ?? '');
   const [logo, setLogo] = useState(request?.logo ?? '');
   const [saving, setSaving] = useState<'draft' | 'submit' | null>(null);
@@ -124,6 +125,7 @@ export default function ExpenseRequestForm({ request }: { request?: ExpenseReque
       budget: Number(budget) > 0 ? Number(budget) : undefined,
       greetingText: greetingText.trim(),
       sendDate,
+      recipient: recipient.trim() || undefined,
       recipientAddress: recipientAddress.trim(),
       logo: logo.trim() || undefined,
       departmentId: departmentId || undefined,
@@ -202,6 +204,11 @@ export default function ExpenseRequestForm({ request }: { request?: ExpenseReque
         <div className="form-row">
           <label>Tanggal Kirim *</label>
           <input type="date" required value={sendDate} onChange={(e) => setSendDate(e.target.value)} style={field} />
+        </div>
+
+        <div className="form-row">
+          <label>Recipient</label>
+          <input value={recipient} onChange={(e) => setRecipient(e.target.value)} style={field} placeholder="(optional)" />
         </div>
 
         <div className="form-row">

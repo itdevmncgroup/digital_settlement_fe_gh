@@ -185,7 +185,7 @@ export default function ExpenseAnalyticsDashboardPage() {
     Promise.all([
       api.get<Summary>(`/dashboard/expense-settlement-summary${qs}`),
       api.get<PodRow[]>(`/dashboard/expense-vs-settlement-by-pod${qs}`),
-      api.get<CategoryRow[]>(`/dashboard/expense-by-category${qs}`),
+      api.get<CategoryRow[]>(`/dashboard/expense-by-activity-type${qs}`),
       api.get<StatusRow[]>(`/dashboard/settlement-status${qs}`),
       api.get<TrendRow[]>(`/dashboard/expense-settlement-trend${qs}`),
       api.get<ReconciliationRow[]>(`/dashboard/expense-settlement-reconciliation${qs ? `${qs}&limit=5` : '?limit=5'}`),
@@ -293,7 +293,7 @@ export default function ExpenseAnalyticsDashboardPage() {
     }
   }
   if (byCategory.length > 0) {
-    insights.push({ icon: '📊', color: 'var(--info, #5ec8f2)', text: `${byCategory[0].name} is the highest expense category` });
+    insights.push({ icon: '📊', color: 'var(--info, #5ec8f2)', text: `${byCategory[0].name} is the highest expense activity type` });
   }
 
   return (
@@ -414,7 +414,7 @@ export default function ExpenseAnalyticsDashboardPage() {
               <SimpleBarChart data={outstandingByPodRows} formatValue={formatCompactCurrency} color="#ef5da8" />
             </div>
             <div className="card">
-              <h3>Expense by Category</h3>
+              <h3>Expense by Activity Type</h3>
               <SimpleBarChart data={categoryBarRows} formatValue={formatCompactCurrency} />
             </div>
             <div className="card">

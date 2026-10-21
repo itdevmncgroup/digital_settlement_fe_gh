@@ -59,7 +59,7 @@ interface DepartmentOption {
   name: string;
 }
 
-interface CategoryOption {
+interface ActivityTypeOption {
   id: string;
   name: string;
 }
@@ -80,6 +80,8 @@ const STATUS_OPTIONS = [
   'APPROVAL_SLS_MAR_DIR',
   'APPROVAL_VP_ACC_BIL_TAX_3TV',
   'APPROVAL_CO_CFO_3TV',
+  'APPROVAL_HEAD_CORSEC',
+  'APPROVAL_SVP',
   'REJECTED',
   'REVISION',
   'READY_TO_MATCHING',
@@ -147,18 +149,18 @@ export default function ExpenseDashboardPage() {
   });
   const [draftTo, setDraftTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [draftDepartmentId, setDraftDepartmentId] = useState('');
-  const [draftCategoryId, setDraftCategoryId] = useState('');
+  const [draftActivityTypeId, setDraftActivityTypeId] = useState('');
   const [draftStatus, setDraftStatus] = useState('');
 
-  const [appliedFilter, setAppliedFilter] = useState({ from: draftFrom, to: draftTo, departmentId: '', categoryId: '', status: '' });
+  const [appliedFilter, setAppliedFilter] = useState({ from: draftFrom, to: draftTo, departmentId: '', activityTypeId: '', status: '' });
 
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
-  const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
+  const [activityTypeOptions, setActivityTypeOptions] = useState<ActivityTypeOption[]>([]);
 
   const [summary, setSummary] = useState<Summary | null>(null);
   const [byAgency, setByAgency] = useState<GroupRow[]>([]);
   const [byAdvertiser, setByAdvertiser] = useState<GroupRow[]>([]);
-  const [byCategory, setByCategory] = useState<GroupRow[]>([]);
+  const [byActivityType, setByActivityType] = useState<GroupRow[]>([]);
   const [byPod, setByPod] = useState<GroupRow[]>([]);
   const [trend, setTrend] = useState<TrendRow[]>([]);
   const [recentTransactions, setRecentTransactions] = useState<RecentTransactionRow[]>([]);
@@ -168,7 +170,7 @@ export default function ExpenseDashboardPage() {
   useEffect(() => {
     const path = canViewAllDepartments ? '/departments?active=true' : '/departments/me';
     api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
-    api.get<CategoryOption[]>('/expense-categories?active=true').then(setCategoryOptions).catch(() => undefined);
+    api.get<ActivityTypeOption[]>('/activity-types?active=true').then(setActivityTypeOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canViewAllDepartments]);
 
@@ -179,16 +181,16 @@ export default function ExpenseDashboardPage() {
       api.get<Summary>(`/dashboard/summary${qs}`),
       api.get<GroupRow[]>(`/dashboard/expense-by-agency${qs}`),
       api.get<GroupRow[]>(`/dashboard/expense-by-advertiser${qs}`),
-      api.get<GroupRow[]>(`/dashboard/expense-by-category${qs}`),
+      api.get<GroupRow[]>(`/dashboard/expense-by-activity-type${qs}`),
       api.get<GroupRow[]>(`/dashboard/expense-by-department${qs}`),
       api.get<TrendRow[]>(`/dashboard/expense-by-month${qs}`),
       api.get<RecentTransactionRow[]>(`/dashboard/recent-transactions${qs ? `${qs}&limit=10` : '?limit=10'}`),
     ])
-      .then(([s, agency, advertiser, category, pod, t, r]) => {
+      .then(([s, agency, advertiser, activityType, pod, t, r]) => {
         setSummary(s);
         setByAgency(agency);
         setByAdvertiser(advertiser);
-        setByCategory(category);
+        setByActivityType(activityType);
         setByPod(pod);
         setTrend(t);
         setRecentTransactions(r);
@@ -199,17 +201,17 @@ export default function ExpenseDashboardPage() {
   }, [appliedFilter]);
 
   const applyFilter = () => {
-    setAppliedFilter({ from: draftFrom, to: draftTo, departmentId: draftDepartmentId, categoryId: draftCategoryId, status: draftStatus });
+    setAppliedFilter({ from: draftFrom, to: draftTo, departmentId: draftDepartmentId, activityTypeId: draftActivityTypeId, status: draftStatus });
   };
 
   const clearFilter = () => {
     setDraftDepartmentId('');
-    setDraftCategoryId('');
+    setDraftActivityTypeId('');
     setDraftStatus('');
-    setAppliedFilter((f) => ({ ...f, departmentId: '', categoryId: '', status: '' }));
+    setAppliedFilter((f) => ({ ...f, departmentId: '', activityTypeId: '', status: '' }));
   };
 
-  const hasAppliedFilter = !!(appliedFilter.departmentId || appliedFilter.categoryId || appliedFilter.status);
+  const hasAppliedFilter = !!(appliedFilter.departmentId || appliedFilter.activityTypeId || appliedFilter.status);
 
   // No PDF-generation library on the backend (see CLAUDE.md) - build a
   // printable summary client-side and let the browser's print dialog "Save as
@@ -277,7 +279,7 @@ export default function ExpenseDashboardPage() {
     color: DONUT_COLORS[i % DONUT_COLORS.length],
   }));
 
-  const categoryBarRows = byCategory.map((row) => ({ id: row.id, name: row.name, value: Number(row.totalExpense) }));
+  const activityTypeBarRows = byActivityType.map((row) => ({ id: row.id, name: row.name, value: Number(row.totalExpense) }));
 
   return (
     <div>
@@ -298,9 +300,9 @@ export default function ExpenseDashboardPage() {
               </option>
             ))}
           </select>
-          <select value={draftCategoryId} onChange={(e) => setDraftCategoryId(e.target.value)} style={{ width: 150 }}>
-            <option value="">All Categories</option>
-            {categoryOptions.map((c) => (
+          <select value={draftActivityTypeId} onChange={(e) => setDraftActivityTypeId(e.target.value)} style={{ width: 150 }}>
+            <option value="">All Activity Types</option>
+            {activityTypeOptions.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>
@@ -390,8 +392,8 @@ export default function ExpenseDashboardPage() {
               <DonutChart data={advertiserDonutRows} centerLabel="Total Expense" formatValue={formatCompactCurrency} />
             </div>
             <div className="card">
-              <h3>Expense by Category</h3>
-              <SimpleBarChart data={categoryBarRows} formatValue={formatCompactCurrency} />
+              <h3>Expense by Activity Type</h3>
+              <SimpleBarChart data={activityTypeBarRows} formatValue={formatCompactCurrency} />
             </div>
           </div>
 

@@ -182,10 +182,10 @@ export default function RolesPage() {
             </div>
           </div>
           <div
+            className="check-grid"
             style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-              gap: '6px 16px',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: '8px 16px',
               opacity: savingRoleId === role.id ? 0.6 : 1,
               pointerEvents: savingRoleId === role.id ? 'none' : 'auto',
             }}
@@ -193,10 +193,9 @@ export default function RolesPage() {
             {permissions.map((p) => {
               const checked = role.permissions.some((rp) => rp.permission.id === p.id);
               return (
-                <label key={p.id} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }} title={p.description ?? undefined}>
+                <label key={p.id} className="check-item" title={p.description ?? undefined}>
                   <input
                     type="checkbox"
-                    style={{ width: 'auto' }}
                     checked={checked}
                     onChange={(e) => togglePermission(role, p.code, e.target.checked)}
                   />

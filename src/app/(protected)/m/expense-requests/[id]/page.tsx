@@ -171,6 +171,7 @@ export default function MobileExpenseRequestDetailPage() {
             {request.requestBudget && <Field label="Budget">{formatCurrency(request.requestBudget)}</Field>}
             <Field label="Isi Ucapan">{request.greetingText}</Field>
             <Field label="Tanggal Kirim">{formatDate(request.sendDate)}</Field>
+            {request.recipient && <Field label="Recipient">{request.recipient}</Field>}
             <Field label="Alamat Penerima">{request.recipientAddress}</Field>
             {request.logo && <Field label="Logo">{request.logo}</Field>}
             {request.budgetAmount && (

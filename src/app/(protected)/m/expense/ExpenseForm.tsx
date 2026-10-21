@@ -282,11 +282,15 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   const { user, hasRole, hasPermission } = useAuth();
   const toast = useToast();
 
-  // expense.create.all / .owndept (or Admin): key the Expense in on another user's behalf - the
-  // requestor stays that user. Anyone who can't create their own (e.g. Sales Admin) must pick one.
-  const canPickRequestor = !isEdit && (hasRole('ADMINISTRATOR') || hasPermission('webmobile.expense.create.owndept'));
+  // expense.create.all / .owndept (or the Web Mobile webmobile.expense.create.owndept, or Admin): key the
+  // Expense in on another user's behalf - the requestor stays that user. Anyone who can't create their
+  // own (e.g. Sales Admin) must pick one.
+  const canPickRequestor =
+    !isEdit && (hasRole('ADMINISTRATOR') || hasPermission('expense.create.all', 'expense.create.owndept', 'webmobile.expense.create.owndept'));
   const requestorRequired = canPickRequestor && !(hasRole('SALES') || hasPermission('expense.create.own', 'webmobile.expense.create.own'));
-  const [requestors, setRequestors] = useState<{ id: string; name: string; employeeId: string; unitId?: string | null }[]>([]);
+  // Admin / expense.create.all may pick any Department; everyone else only their own (the API enforces it too).
+  const canAnyDepartment = canPickRequestor && (hasRole('ADMINISTRATOR') || hasPermission('expense.create.all'));
+  const [requestors, setRequestors] = useState<{ id: string; name: string; employeeId: string; unitId?: string | null; departmentIds?: string[] }[]>([]);
   const [requestorId, setRequestorId] = useState('');
 
   const [units, setUnits] = useState<Option[]>([]);
@@ -358,31 +362,35 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Departments follow the requestor when one is picked (limited to the caller's own unless
-  // Admin / expense.create.all - the API enforces it too), else the caller's own.
+  // Department comes first: the caller's own Department(s) (every active one for Admin /
+  // expense.create.all). The Requestor list, Corporate card list and the rest of the form
+  // follow whichever Department is picked.
   useEffect(() => {
-    if (requestorRequired && !requestorId) {
-      setDepartments([]);
-      return;
-    }
     let cancelled = false;
-    const limitToMine = !!requestorId && !hasRole('ADMINISTRATOR') && !hasPermission('expense.create.all');
-    (async () => {
-      let d = await api.get<Option[]>(requestorId ? `/departments?salesId=${requestorId}&active=true` : '/departments/me');
-      if (limitToMine) {
-        const mine = await api.get<Option[]>('/departments/me');
-        const mineIds = new Set(mine.map((o) => o.id));
-        d = d.filter((o) => mineIds.has(o.id));
-      }
-      if (cancelled) return;
-      setDepartments(d);
-      if (d.length > 0) setForm((f) => (f.departmentId ? f : { ...f, departmentId: d[0].id }));
-    })().catch(() => undefined);
+    api
+      .get<Option[]>(canAnyDepartment ? '/departments?active=true' : '/departments/me')
+      .then((d) => {
+        if (cancelled) return;
+        setDepartments(d);
+        if (d.length > 0) setForm((f) => (f.departmentId ? f : { ...f, departmentId: d[0].id }));
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestorId]);
+  }, []);
+
+  // Requestors who belong to the picked Department (the caller themself is the "Myself" option).
+  const departmentRequestors = requestors.filter((r) => r.id !== user?.id && !!form.departmentId && !!r.departmentIds?.includes(form.departmentId));
+
+  const changeDepartment = (departmentId: string) => {
+    // Corporate card belongs to the Department. The requestor stays only while still a member of
+    // the new Department; otherwise fall back to Myself / unpicked and re-derive the Unit.
+    const keep = !requestorId || !!requestors.find((r) => r.id === requestorId)?.departmentIds?.includes(departmentId);
+    if (!keep) setRequestorId('');
+    setForm((f) => ({ ...f, departmentId, creditCardId: '', unitId: keep ? f.unitId : '' }));
+  };
 
   useEffect(() => {
     const unitId = requestorId ? requestors.find((r) => r.id === requestorId)?.unitId : requestorRequired ? undefined : user?.unitId;
@@ -843,6 +851,17 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Details</h3>
 
+        {departments.length > 1 && (
+          <div className="form-row">
+            <label>Department *</label>
+            <select required value={form.departmentId} onChange={(e) => changeDepartment(e.target.value)} style={field}>
+              {departments.map((o) => (
+                <option key={o.id} value={o.id}>{o.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {canPickRequestor && (
           <div className="form-row">
             <label>{requestorRequired ? 'Requestor (entry on behalf of) *' : 'Requestor'}</label>
@@ -850,16 +869,19 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
               value={requestorId}
               onChange={(e) => {
                 setRequestorId(e.target.value);
-                // Department/Unit/Corporate Card belong to the requestor - re-derive them.
-                setForm((f) => ({ ...f, departmentId: '', unitId: '', creditCardId: '' }));
+                // Unit follows the requestor - re-derive it.
+                setForm((f) => ({ ...f, unitId: '' }));
               }}
               style={field}
             >
               <option value="">{requestorRequired ? 'Select requestor' : `Myself (${user?.name ?? ''})`}</option>
-              {requestors.filter((r) => r.id !== user?.id).map((r) => (
+              {departmentRequestors.map((r) => (
                 <option key={r.id} value={r.id}>{r.name} ({r.employeeId})</option>
               ))}
             </select>
+            {requestorRequired && form.departmentId && departmentRequestors.length === 0 && (
+              <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>No requestor available in this department</div>
+            )}
           </div>
         )}
 
@@ -1009,17 +1031,6 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
           <div className="form-row">
             <label>Payment note</label>
             <input value={form.paymentMethodNote} onChange={(e) => set({ paymentMethodNote: e.target.value })} style={field} placeholder="(optional)" />
-          </div>
-        )}
-
-        {departments.length > 1 && (
-          <div className="form-row">
-            <label>Department</label>
-            <select value={form.departmentId} onChange={(e) => set({ departmentId: e.target.value, creditCardId: '' })} style={field}>
-              {departments.map((o) => (
-                <option key={o.id} value={o.id}>{o.name}</option>
-              ))}
-            </select>
           </div>
         )}
 

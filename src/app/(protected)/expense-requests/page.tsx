@@ -38,7 +38,9 @@ interface ExpenseRequestRow {
   requestBudget: string | null;
   greetingText: string;
   sendDate: string;
+  recipient: string | null;
   recipientAddress: string;
+  logo: string | null;
   status: ExpenseRequestStatus;
   rejectReason: string | null;
   budgetAmount: string | null;
@@ -72,7 +74,9 @@ const EMPTY_FORM = {
   budget: '',
   greetingText: '',
   sendDate: '',
+  recipient: '',
   recipientAddress: '',
+  logo: '',
   departmentId: '',
 };
 
@@ -169,7 +173,7 @@ export default function ExpenseRequestsPage() {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((r) =>
-      [r.requestNo, r.requestedBy?.name, r.department?.name, r.activityType?.name, clientLabel(r), r.brands?.map((b) => b.brand.name).join(' '), r.greetingText, r.recipientAddress, STATUS_LABEL[r.status]]
+      [r.requestNo, r.requestedBy?.name, r.department?.name, r.activityType?.name, clientLabel(r), r.brands?.map((b) => b.brand.name).join(' '), r.greetingText, r.recipient, r.recipientAddress, STATUS_LABEL[r.status]]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q)),
     );
@@ -195,9 +199,12 @@ export default function ExpenseRequestsPage() {
     setParties(EMPTY_PARTIES);
   };
 
+  // Agency OR Advertiser is required (either one is enough); Brand is always optional.
+  const partiesMissing = parties.agencies.length === 0 && parties.advertisers.length === 0;
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (parties.agencies.length === 0 && parties.advertisers.length === 0) return setFormError('Select at least one Agency or Advertiser');
+    if (partiesMissing) return setFormError('Select at least one Agency or Advertiser');
     setSaving(true);
     setFormError('');
     try {
@@ -209,7 +216,9 @@ export default function ExpenseRequestsPage() {
         budget: Number(form.budget) > 0 ? Number(form.budget) : undefined,
         greetingText: form.greetingText.trim(),
         sendDate: form.sendDate,
+        recipient: form.recipient.trim() || undefined,
         recipientAddress: form.recipientAddress.trim(),
+        logo: form.logo.trim() || undefined,
         departmentId: form.departmentId || undefined,
       });
       closeForm();
@@ -355,6 +364,7 @@ export default function ExpenseRequestsPage() {
               <th>Client</th>
               <th>Greeting</th>
               <th>Send Date</th>
+              <th>Recipient</th>
               <th>Recipient Address</th>
               <th>Budget</th>
               <th>Status</th>
@@ -375,6 +385,7 @@ export default function ExpenseRequestsPage() {
                   <td>{clientLabel(r)}</td>
                   <td>{r.greetingText}</td>
                   <td>{formatDate(r.sendDate)}</td>
+                  <td>{r.recipient || '-'}</td>
                   <td>{r.recipientAddress}</td>
                   <td>
                     {r.budgetAmount ? formatCurrency(r.budgetAmount) : '-'}
@@ -454,59 +465,104 @@ export default function ExpenseRequestsPage() {
       </div>
 
       {showForm && (
-        <Modal title="Create Expense Request" onClose={closeForm}>
+        <Modal title="Create Expense Request" onClose={closeForm} wide>
           <form onSubmit={onSubmit}>
-            <div className="form-row">
-              <label>Activity Type *</label>
-              <select required value={form.activityTypeId} onChange={(e) => setForm({ ...form, activityTypeId: e.target.value })}>
-                {activityTypes.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {needsDepartment && (
-              <div className="form-row">
-                <label>Department * (determines Head Dept approver)</label>
-                <select required value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
-                  <option value="">Select department</option>
-                  {departments.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
+            <div className="form-section">
+              <div className="form-section-title">Request</div>
+              <div className="form-cols-3">
+                <div className="form-row">
+                  <label>Activity Type *</label>
+                  <select required value={form.activityTypeId} onChange={(e) => setForm({ ...form, activityTypeId: e.target.value })}>
+                    {activityTypes.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {needsDepartment && (
+                  <div className="form-row">
+                    <label>Department *</label>
+                    <select required value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
+                      <option value="">Select department</option>
+                      {departments.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="form-row">
+                  <label>Tanggal Kirim *</label>
+                  <DatePicker required value={form.sendDate} onChange={(v) => setForm({ ...form, sendDate: v })} />
+                </div>
               </div>
-            )}
-            <ClientPartiesPicker value={parties} onChange={setParties} style={{ width: '100%' }} />
-            <div className="form-row">
-              <label>Budget (IDR)</label>
-              <NumberInput inputMode="numeric" value={form.budget} onChange={(v) => setForm({ ...form, budget: v })} placeholder="0" />
+              {needsDepartment && <div className="form-hint">Department menentukan approver Head Dept.</div>}
             </div>
-            <div className="form-row">
-              <label>Isi Ucapan *</label>
-              <textarea required rows={4} value={form.greetingText} onChange={(e) => setForm({ ...form, greetingText: e.target.value })} />
+
+            <div className="form-section">
+              <div className="form-section-title">Client</div>
+              {/* Agency / Advertiser / Brand are three .form-row siblings - one column each. */}
+              <div className="form-cols-3">
+                <ClientPartiesPicker value={parties} onChange={setParties} style={{ width: '100%' }} compact />
+              </div>
+              <div className="form-hint" style={partiesMissing ? { color: 'var(--danger, #d63939)' } : undefined}>
+                Wajib isi salah satu: Agency atau Advertiser (bisa lebih dari 1). Brand opsional - Advertiser boleh tanpa Brand.
+              </div>
             </div>
-            <div className="form-row">
-              <label>Tanggal Kirim *</label>
-              <DatePicker required value={form.sendDate} onChange={(v) => setForm({ ...form, sendDate: v })} />
+
+            <div className="form-section">
+              <div className="form-section-title">Ucapan &amp; Penerima</div>
+              <div className="form-cols-2">
+                <div className="form-row">
+                  <label>Isi Ucapan *</label>
+                  <textarea
+                    required
+                    rows={7}
+                    value={form.greetingText}
+                    onChange={(e) => setForm({ ...form, greetingText: e.target.value })}
+                    style={{ resize: 'vertical' }}
+                  />
+                </div>
+                <div>
+                  <div className="form-row">
+                    <label>Recipient</label>
+                    <input value={form.recipient} onChange={(e) => setForm({ ...form, recipient: e.target.value })} placeholder="(optional)" />
+                  </div>
+                  <div className="form-row">
+                    <label>Alamat Penerima *</label>
+                    <textarea
+                      required
+                      rows={4}
+                      value={form.recipientAddress}
+                      onChange={(e) => setForm({ ...form, recipientAddress: e.target.value })}
+                      style={{ resize: 'vertical' }}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="form-row">
-              <label>Alamat Penerima *</label>
-              <textarea
-                required
-                rows={3}
-                value={form.recipientAddress}
-                onChange={(e) => setForm({ ...form, recipientAddress: e.target.value })}
-              />
+
+            <div className="form-section">
+              <div className="form-section-title">Budget &amp; Logo</div>
+              <div className="form-cols-2">
+                <div className="form-row">
+                  <label>Budget (IDR)</label>
+                  <NumberInput inputMode="numeric" value={form.budget} onChange={(v) => setForm({ ...form, budget: v })} placeholder="0" />
+                </div>
+                <div className="form-row">
+                  <label>Logo</label>
+                  <input value={form.logo} onChange={(e) => setForm({ ...form, logo: e.target.value })} placeholder="(optional)" />
+                </div>
+              </div>
             </div>
-            {formError && <div className="error-text">{formError}</div>}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+            {formError && <div className="error-text" style={{ marginTop: 12 }}>{formError}</div>}
+            <div className="form-actions">
               <button type="button" className="btn" onClick={closeForm}>
                 Cancel
               </button>
-              <button className="btn btn-primary" type="submit" disabled={saving || !form.sendDate}>
+              <button className="btn btn-primary" type="submit" disabled={saving || !form.sendDate || partiesMissing}>
                 {saving ? 'Saving...' : 'Submit'}
               </button>
             </div>

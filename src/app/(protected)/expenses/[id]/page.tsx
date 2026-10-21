@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api, ApiError, uploadFile } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -347,6 +347,10 @@ export default function ExpenseDetailPage() {
     !!currentStepInfo &&
     !awaitingCorsecInvoice &&
     (currentStepInfo.resolvedApprover?.id === user?.id || hasRole('ADMINISTRATOR') || isSalesAdminTier);
+  // Sends a DRAFT / PENDING_SALES_ADMIN expense into the approval chain - shown in the page
+  // header and as the "Submit" button of the Edit Expense form (not while Approve/Revise apply).
+  const showSubmitButton =
+    canEditFields && !(salesAdminActsDirectly || canAct) && (expense?.status === 'DRAFT' || expense?.status === 'PENDING_SALES_ADMIN');
   const canMatch = hasRole('ADMINISTRATOR') || hasPermission('expense.match.all', 'expense.match.owndept');
   const matchedTxn = expense?.bankTransactions.find((t) => MATCHED_TXN_STATUSES.includes(t.status)) ?? null;
 
@@ -402,13 +406,45 @@ export default function ExpenseDetailPage() {
     setEditParticipants((prev) => prev.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
   const removeEditParticipant = (i: number) => setEditParticipants((prev) => prev.filter((_, idx) => idx !== i));
 
+  // Which button fired the Edit form: "Save as Draft" (formNoValidate) only saves,
+  // "Submit" saves and then sends the expense into the approval chain.
+  const submitAfterSaveRef = useRef(false);
+  const [submittingForm, setSubmittingForm] = useState(false);
+
+  // Foto Kegiatan and Foto Invoice are mandatory before the expense can go into (or
+  // back into) the approval chain - checked against what is already uploaded, since
+  // files are attached from the Foto/Invoice sections below, not from the edit form.
+  const missingEvidenceMessage = () => {
+    if (!expense) return null;
+    if (expense.photos.length === 0) return 'Foto Kegiatan is required - upload at least one photo first.';
+    if (!expense.invoices.some((inv) => inv.files.length > 0)) return 'Foto Invoice is required - upload at least one invoice first.';
+    return null;
+  };
+
   const saveFields = async (e: FormEvent) => {
     e.preventDefault();
-    if (!editForm.paymentMethodId) {
+    const submitAfterSave = showSubmitButton && submitAfterSaveRef.current;
+    // Payment Method may stay empty while the expense is still a DRAFT, but is
+    // required for every other save (REVISION resubmit, PENDING_SALES_ADMIN) and for Submit.
+    const paymentMethodOptional = expense?.status === 'DRAFT' && !submitAfterSave;
+    if (!editForm.expenseDate || !editForm.purpose.trim() || !editForm.amount) {
+      setError('Expense Date, Purpose and Amount are required.');
+      return;
+    }
+    if (!editForm.paymentMethodId && !paymentMethodOptional) {
       setError('Payment Method is required.');
       return;
     }
+    // Enforced wherever the save hands the expense on (Submit, REVISION resubmit,
+    // PENDING_SALES_ADMIN completion); a plain "Save as Draft" may still lack them.
+    const handsOn = submitAfterSave || expense?.status === 'REVISION' || expense?.status === 'PENDING_SALES_ADMIN';
+    const missingEvidence = handsOn ? missingEvidenceMessage() : null;
+    if (missingEvidence) {
+      setError(missingEvidence);
+      return;
+    }
     setBusy(true);
+    setSubmittingForm(submitAfterSave);
     setError('');
     try {
       const validItems = editItems
@@ -437,16 +473,22 @@ export default function ExpenseDetailPage() {
       if (validParticipants.length > 0) payload.participants = validParticipants;
 
       await api.patch(`/expenses/${id}`, payload);
+      if (submitAfterSave) await api.post(`/expenses/${id}/submit`);
       setEditingFields(false);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Save failed');
+      setError(err instanceof ApiError ? err.message : submitAfterSave ? 'Submit failed' : 'Save failed');
     } finally {
       setBusy(false);
     }
   };
 
   const submitDraft = async () => {
+    const missingEvidence = missingEvidenceMessage();
+    if (missingEvidence) {
+      setError(missingEvidence);
+      return;
+    }
     setBusy(true);
     try {
       await api.post(`/expenses/${id}/submit`);
@@ -714,8 +756,7 @@ export default function ExpenseDetailPage() {
               </button>
             </>
           ) : (
-            canEditFields &&
-            (expense.status === 'DRAFT' || expense.status === 'PENDING_SALES_ADMIN') && (
+            showSubmitButton && (
               <button
                 className="btn btn-primary"
                 disabled={busy}
@@ -919,11 +960,9 @@ export default function ExpenseDetailPage() {
                 </div>
               )}
               <div
+                className="check-grid"
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(4, 1fr)',
-                  gap: '4px 16px',
-                  maxHeight: 160,
+                  maxHeight: 200,
                   overflowY: 'auto',
                   border: '1px solid var(--border)',
                   borderRadius: 6,
@@ -933,7 +972,7 @@ export default function ExpenseDetailPage() {
                 {brandOptions
                   .filter((b) => b.id !== expense.brand?.id)
                   .map((b) => (
-                    <label key={b.id} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <label key={b.id} className="check-item">
                       <input type="checkbox" checked={editExtraBrands.some((sb) => sb.id === b.id)} onChange={() => toggleExtraBrand(b)} />
                       {b.name}
                     </label>
@@ -1018,9 +1057,38 @@ export default function ExpenseDetailPage() {
             {editItems.length === 0 && <div style={{ color: 'var(--muted)', fontSize: 12 }}>No line items - amount above is used as-is.</div>}
           </div>
 
-          <button className="btn btn-primary" type="submit" disabled={busy || !editForm.expenseDate} style={{ marginTop: 16 }}>
-            {busy ? 'Saving...' : expense.status === 'REVISION' ? 'Resubmit' : 'Save Changes'}
-          </button>
+          <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+            {showSubmitButton ? (
+              <>
+                <button
+                  className="btn"
+                  type="submit"
+                  formNoValidate={expense.status === 'DRAFT'}
+                  disabled={busy || !editForm.expenseDate}
+                  onClick={() => {
+                    submitAfterSaveRef.current = false;
+                  }}
+                >
+                  {busy && !submittingForm ? 'Saving...' : expense.status === 'DRAFT' ? 'Save as Draft' : 'Save Changes'}
+                </button>
+                <button
+                  className="btn btn-primary"
+                  type="submit"
+                  disabled={busy || !editForm.expenseDate}
+                  onClick={() => {
+                    submitAfterSaveRef.current = true;
+                  }}
+                  title="Save the changes and send this expense into the approval chain"
+                >
+                  {busy && submittingForm ? 'Submitting...' : 'Submit'}
+                </button>
+              </>
+            ) : (
+              <button className="btn btn-primary" type="submit" disabled={busy || !editForm.expenseDate}>
+                {busy ? 'Saving...' : expense.status === 'REVISION' ? 'Resubmit' : 'Save Changes'}
+              </button>
+            )}
+          </div>
         </form>
       ) : (
         <div className="card">
@@ -1198,7 +1266,7 @@ export default function ExpenseDetailPage() {
 
       <div className="card">
         <div className="toolbar">
-          <h3 style={{ margin: 0 }}>Foto Kegiatan</h3>
+          <h3 style={{ margin: 0 }}>Foto Kegiatan *</h3>
           {canUploadFiles && (
             <button
               className="btn"

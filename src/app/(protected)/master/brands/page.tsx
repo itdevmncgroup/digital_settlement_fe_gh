@@ -11,7 +11,7 @@ import SearchBox from '@/components/SearchBox';
 interface AdvertiserOption {
   id: string;
   name: string;
-  agency?: { name: string };
+  agencies?: { agency: { name: string } }[];
 }
 
 interface Brand {
@@ -19,7 +19,7 @@ interface Brand {
   code: string;
   name: string;
   isActive: boolean;
-  advertiser?: { id: string; name: string; agency?: { name: string } };
+  advertiser?: { id: string; name: string; agencies?: { agency: { name: string } }[] };
 }
 
 // Every Brand belongs to exactly one Advertiser (Agency -> Advertiser -> Brand,
@@ -136,7 +136,7 @@ export default function BrandsPage() {
                 <option value="">Select advertiser</option>
                 {advertisers.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.name} {a.agency ? `(${a.agency.name})` : ''}
+                    {a.name} {a.agencies?.length ? `(${a.agencies.map((l) => l.agency.name).join(', ')})` : ''}
                   </option>
                 ))}
               </select>
@@ -168,7 +168,7 @@ export default function BrandsPage() {
                 <td>{b.code}</td>
                 <td>{b.name}</td>
                 <td>{b.advertiser?.name ?? '-'}</td>
-                <td>{b.advertiser?.agency?.name ?? '-'}</td>
+                <td>{b.advertiser?.agencies?.map((l) => l.agency.name).join(', ') || '-'}</td>
                 <td>{b.isActive ? 'Yes' : 'No'}</td>
                 {canManage && (
                   <td>

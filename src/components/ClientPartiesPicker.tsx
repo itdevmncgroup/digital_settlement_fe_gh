@@ -50,7 +50,19 @@ function AddSelect({ options, placeholder, onPick, style }: { options: PartyOpti
 
 // Agency / Advertiser (at least one of the two is required - validated by the caller) / Brand (optional), each multi-select.
 // Brand options follow the picked Advertisers (a Brand belongs to exactly one).
-export default function ClientPartiesPicker({ value, onChange, style }: { value: ClientParties; onChange: (v: ClientParties) => void; style: React.CSSProperties }) {
+// `compact` is for a multi-column layout (the desktop Create popup): short single-line labels and the
+// dropdown above its chips, so the three controls line up across columns however many are picked.
+export default function ClientPartiesPicker({
+  value,
+  onChange,
+  style,
+  compact,
+}: {
+  value: ClientParties;
+  onChange: (v: ClientParties) => void;
+  style: React.CSSProperties;
+  compact?: boolean;
+}) {
   const [agencies, setAgencies] = useState<PartyOption[]>([]);
   const [advertisers, setAdvertisers] = useState<PartyOption[]>([]);
   const [brands, setBrands] = useState<BrandPartyOption[]>([]);
@@ -75,8 +87,8 @@ export default function ClientPartiesPicker({ value, onChange, style }: { value:
   return (
     <>
       <div className="form-row">
-        <label>Agency * (isi Agency atau Advertiser, bisa lebih dari 1)</label>
-        <Chips items={value.agencies} onRemove={(id) => onChange({ ...value, agencies: value.agencies.filter((a) => a.id !== id) })} />
+        <label>{compact ? 'Agency' : 'Agency * (isi Agency atau Advertiser, bisa lebih dari 1)'}</label>
+        {!compact && <Chips items={value.agencies} onRemove={(id) => onChange({ ...value, agencies: value.agencies.filter((a) => a.id !== id) })} />}
         <AddSelect
           placeholder="Add agency..."
           options={agencies.filter((a) => !value.agencies.some((s) => s.id === a.id))}
@@ -86,14 +98,17 @@ export default function ClientPartiesPicker({ value, onChange, style }: { value:
           }}
           style={style}
         />
+        {compact && <div style={{ marginTop: 8 }}><Chips items={value.agencies} onRemove={(id) => onChange({ ...value, agencies: value.agencies.filter((a) => a.id !== id) })} /></div>}
       </div>
 
       <div className="form-row">
-        <label>Advertiser * (isi Agency atau Advertiser, bisa lebih dari 1)</label>
-        <Chips
-          items={value.advertisers}
-          onRemove={(id) => onChange({ ...value, advertisers: value.advertisers.filter((a) => a.id !== id), brands: value.brands.filter((b) => b.advertiserId !== id) })}
-        />
+        <label>{compact ? 'Advertiser' : 'Advertiser * (isi Agency atau Advertiser, bisa lebih dari 1)'}</label>
+        {!compact && (
+          <Chips
+            items={value.advertisers}
+            onRemove={(id) => onChange({ ...value, advertisers: value.advertisers.filter((a) => a.id !== id), brands: value.brands.filter((b) => b.advertiserId !== id) })}
+          />
+        )}
         <AddSelect
           placeholder="Add advertiser..."
           options={advertisers.filter((a) => !value.advertisers.some((s) => s.id === a.id))}
@@ -103,16 +118,24 @@ export default function ClientPartiesPicker({ value, onChange, style }: { value:
           }}
           style={style}
         />
+        {compact && (
+          <div style={{ marginTop: 8 }}>
+            <Chips
+              items={value.advertisers}
+              onRemove={(id) => onChange({ ...value, advertisers: value.advertisers.filter((a) => a.id !== id), brands: value.brands.filter((b) => b.advertiserId !== id) })}
+            />
+          </div>
+        )}
       </div>
 
       <div className="form-row">
-        <label>Brand (optional, can pick more than one)</label>
+        <label>{compact ? 'Brand' : 'Brand (optional, can pick more than one)'}</label>
         {value.advertisers.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--muted)' }}>Pick an advertiser first</div>
         ) : brands.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--muted)' }}>No brands for the selected advertiser(s)</div>
         ) : (
-          <div style={{ border: '1px solid var(--border)', borderRadius: 8, maxHeight: 220, overflowY: 'auto' }}>
+          <div style={{ border: '1px solid var(--border)', borderRadius: 8, maxHeight: compact ? 160 : 220, overflowY: 'auto' }}>
             {value.advertisers.map((adv) => {
               const list = brands.filter((b) => b.advertiserId === adv.id);
               if (list.length === 0) return null;

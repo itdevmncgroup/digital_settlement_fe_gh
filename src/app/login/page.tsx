@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { ApiError } from '@/lib/api';
@@ -74,6 +75,11 @@ export default function LoginPage() {
 
         <label htmlFor="password">Password</label>
         <input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        <div style={{ textAlign: 'right', marginTop: 8 }}>
+          <Link href="/forgot-password" className="auth-mobile-link" style={{ margin: 0 }}>
+            Forgot password?
+          </Link>
+        </div>
 
         <label>View</label>
         <div className="login-view-toggle" role="group" aria-label="View mode">

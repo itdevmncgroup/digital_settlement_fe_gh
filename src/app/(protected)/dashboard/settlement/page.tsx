@@ -81,7 +81,7 @@ interface UserOption {
   name: string;
 }
 
-const STATUS_OPTIONS = ['DRAFT', 'APPROVAL_SLS_MAR_DIR', 'APPROVAL_VP_ACC_BIL_TAX_3TV', 'APPROVAL_CO_CFO_3TV', 'COMPLETE', 'REJECTED'];
+const STATUS_OPTIONS = ['DRAFT', 'APPROVAL_SLS_MAR_DIR', 'APPROVAL_VP_ACC_BIL_TAX_3TV', 'APPROVAL_CO_CFO_3TV', 'APPROVAL_HEAD_CORSEC', 'APPROVAL_SVP', 'COMPLETE', 'REJECTED'];
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value);

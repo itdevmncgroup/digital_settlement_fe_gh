@@ -51,11 +51,13 @@ interface SettlementRow {
   settlementNo: string;
   totalAmount: string;
   // DRAFT (unused in practice) | DRAFT_SETTLEMENT | APPROVAL_SLS_MAR_DIR |
-  // APPROVAL_VP_ACC_BIL_TAX_3TV | APPROVAL_CO_CFO_3TV | REVISION | COMPLETE | REJECTED.
+  // APPROVAL_VP_ACC_BIL_TAX_3TV | APPROVAL_CO_CFO_3TV | APPROVAL_HEAD_CORSEC | APPROVAL_SVP | REVISION | COMPLETE | REJECTED.
   status: string;
   // Only meaningful once status is COMPLETE - NOT_STARTED | PENDING | SENT | FAILED.
   odooSyncStatus: string;
   odooSyncError: string | null;
+  // Unit picked in "Create Draft PR" (its code is the PR's org_id) - preselected when retrying a FAILED send.
+  odooUnitId: string | null;
   createdAt: string;
   department: { id: string; name: string };
   createdBy: { name: string };
@@ -309,29 +311,41 @@ function SettlementPageInner() {
     }
   };
 
-  const openDraftPr = (r: SettlementRow) => {
-    setDraftPrSettlement(r);
-    setDraftPrUnitId('');
-    setDraftPrPreview(null);
-    setDraftPrStatement(null);
-    setDraftPrError('');
-    if (unitOptions.length === 0) {
-      api.get<UnitOption[]>('/units?active=true').then(setUnitOptions).catch(() => setDraftPrError('Failed to load units'));
-    }
-  };
-
-  const previewDraftPr = async () => {
-    if (!draftPrSettlement || !draftPrUnitId) return;
+  const loadDraftPrPreview = async (settlementId: string, unitId: string) => {
     setDraftPrLoading(true);
-    setDraftPrError('');
     try {
-      setDraftPrPreview(await api.get<DraftPrPreview>(`/settlements/${draftPrSettlement.id}/draft-pr/preview?unitId=${draftPrUnitId}`));
+      setDraftPrPreview(await api.get<DraftPrPreview>(`/settlements/${settlementId}/draft-pr/preview?unitId=${unitId}`));
     } catch (err) {
       setDraftPrPreview(null);
       setDraftPrError(err instanceof ApiError ? err.message : 'Failed to load preview');
     } finally {
       setDraftPrLoading(false);
     }
+  };
+
+  // Also the "Retry" action of a FAILED send: same popup, with the Unit used last
+  // time preselected and the preview loaded. The bank statement has to be picked
+  // again (it isn't stored), which is why retry goes through here and not straight
+  // to /retry-sync.
+  const openDraftPr = (r: SettlementRow) => {
+    const retryUnitId = r.odooSyncStatus === 'FAILED' ? r.odooUnitId ?? '' : '';
+    setDraftPrSettlement(r);
+    setDraftPrUnitId(retryUnitId);
+    setDraftPrPreview(null);
+    setDraftPrStatement(null);
+    setDraftPrError(
+      r.odooSyncStatus === 'FAILED' ? `Last send to Odoo failed${r.odooSyncError ? `: ${r.odooSyncError}` : ''}. You can try again.` : '',
+    );
+    if (unitOptions.length === 0) {
+      api.get<UnitOption[]>('/units?active=true').then(setUnitOptions).catch(() => setDraftPrError('Failed to load units'));
+    }
+    if (retryUnitId) loadDraftPrPreview(r.id, retryUnitId);
+  };
+
+  const previewDraftPr = async () => {
+    if (!draftPrSettlement || !draftPrUnitId) return;
+    setDraftPrError('');
+    await loadDraftPrPreview(draftPrSettlement.id, draftPrUnitId);
   };
 
   // The API never throws on a failed Odoo push - it records FAILED + the error on
@@ -370,19 +384,6 @@ function SettlementPageInner() {
       setDraftPrError(err instanceof ApiError ? err.message : 'Failed to generate PDF');
     } finally {
       setDraftPrPdfLoading(false);
-    }
-  };
-
-  const retrySync = async (id: string) => {
-    setBusy(true);
-    setError('');
-    try {
-      await api.post(`/settlements/${id}/retry-sync`);
-      load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Retry failed');
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -511,9 +512,14 @@ function SettlementPageInner() {
                         </svg>
                       </button>
                     )}
-                    {canManage && r.status === 'COMPLETE' && r.odooSyncStatus === 'FAILED' && (
-                      <button className="btn" disabled={busy} onClick={() => retrySync(r.id)}>
-                        Retry Odoo Sync
+                    {canDraftPr(r.department.id) && r.status === 'COMPLETE' && r.odooSyncStatus === 'FAILED' && (
+                      <button
+                        className="btn btn-primary"
+                        title={r.odooSyncError ? `Send to Odoo failed: ${r.odooSyncError}` : 'Send to Odoo failed'}
+                        disabled={busy}
+                        onClick={() => openDraftPr(r)}
+                      >
+                        Retry Send to Odoo
                       </button>
                     )}
                   </td>
@@ -624,7 +630,7 @@ function SettlementPageInner() {
       </div>
 
       {draftPrSettlement && (
-        <Modal title={`Create Draft PR - ${draftPrSettlement.settlementNo}`} onClose={() => setDraftPrSettlement(null)} wide>
+        <Modal title={`${draftPrSettlement.odooSyncStatus === 'FAILED' ? 'Retry Send to Odoo' : 'Create Draft PR'} - ${draftPrSettlement.settlementNo}`} onClose={() => setDraftPrSettlement(null)} wide>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <select
               value={draftPrUnitId}

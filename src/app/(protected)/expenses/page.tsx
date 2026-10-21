@@ -19,7 +19,6 @@ import SplashLoader from '@/components/SplashLoader';
 import { useToast } from '@/components/ToastProvider';
 import Modal from '@/components/Modal';
 import ExpenseFromRequestModal from '@/components/ExpenseFromRequestModal';
-import ZoomableImage from '@/components/ZoomableImage';
 import { NavIcon } from '@/components/NavIcons';
 
 const MATCHED_TXN_STATUSES = ['AUTO_MATCHED', 'MANUAL_MATCHED'];
@@ -58,7 +57,7 @@ interface ExpenseRow {
   status: string;
   salesId: string;
   sales: { name: string };
-  advertiser: { name: string; agency?: { name: string } | null } | null;
+  advertiser: { name: string; agencies?: { agency: { name: string } }[] } | null;
   extraAgencies?: { agency: { name: string } }[];
   brand: { name: string };
   department: { id: string; name: string } | null;
@@ -94,9 +93,11 @@ function isMatched(row: { isMatched: boolean }) {
   return row.isMatched;
 }
 
-// Advertiser's own Agency plus any extra Agencies tagged on the Expense, de-duplicated.
+// Agencies explicitly tagged on the Expense; when none were, the Advertiser's own Agencies
+// (Agency <-> Advertiser is many-to-many). Same rule as the dashboard's Expense-by-Agency.
 function agencyNames(row: Pick<ExpenseRow, 'advertiser' | 'extraAgencies'>) {
-  const names = [row.advertiser?.agency?.name, ...(row.extraAgencies ?? []).map((e) => e.agency.name)].filter((n): n is string => !!n);
+  const tagged = (row.extraAgencies ?? []).map((e) => e.agency.name);
+  const names = tagged.length ? tagged : (row.advertiser?.agencies ?? []).map((l) => l.agency.name);
   return names.length ? Array.from(new Set(names)).join(', ') : '-';
 }
 
@@ -137,11 +138,7 @@ interface SalesOption {
   employeeId: string;
   roles: string[];
   unitId?: string | null;
-}
-
-interface CategoryOption {
-  id: string;
-  name: string;
+  departmentIds?: string[];
 }
 
 interface ItemRow {
@@ -235,7 +232,6 @@ const STATUS_OPTIONS = [
   'SETTLED',
 ];
 const ALL_STATUSES_VALUE = 'ALL';
-const emptyItem = (): ItemRow => ({ description: '', price: '', qty: '1', categoryId: '' });
 const itemSubtotal = (item: ItemRow) => (Number(item.price) || 0) * (Number(item.qty) || 0);
 const emptyParticipant = (category: ParticipantCategory): ParticipantRow => ({ category, name: '', position: '', company: '' });
 
@@ -264,29 +260,6 @@ function TxnStatusBadge({ status }: { status: ScannedTransactionRow['status'] })
       : 'badge-info';
   const label = status === 'UNMATCHED' ? 'NOT MATCHED' : status.replace(/_/g, ' ');
   return <span className={`badge ${cls}`}>{label}</span>;
-}
-
-function LocalFileZoom({ file }: { file: File }) {
-  const [url, setUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    const objectUrl = URL.createObjectURL(file);
-    setUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [file]);
-
-  if (!file.type.startsWith('image/')) {
-    return (
-      <div style={{ padding: 24, textAlign: 'center', color: 'var(--muted)', border: '1px dashed var(--border)', borderRadius: 6 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <NavIcon name="file" /> {file.name}
-        </span>
-        <div style={{ fontSize: 12, marginTop: 4 }}>PDF — no inline zoom preview, open the thumbnail above to view.</div>
-      </div>
-    );
-  }
-  if (!url) return <div style={{ color: 'var(--muted)' }}>Loading...</div>;
-  return <ZoomableImage src={url} alt={file.name} />;
 }
 
 export default function ExpensesPage() {
@@ -388,7 +361,6 @@ function ExpensesPageInner() {
 
   const [salesOptions, setSalesOptions] = useState<SalesOption[]>([]);
   const [onBehalfOfSalesId, setOnBehalfOfSalesId] = useState('');
-  const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
   const [creditCardOptions, setCreditCardOptions] = useState<CreditCardOption[]>([]);
   const [paymentMethodOptions, setPaymentMethodOptions] = useState<PaymentMethodOption[]>([]);
@@ -423,8 +395,6 @@ function ExpensesPageInner() {
   const [ocrWarnings, setOcrWarnings] = useState<string[]>([]);
   const [ocrRaw, setOcrRaw] = useState<ParsedReceipt | null>(null);
   const [invoiceForm, setInvoiceForm] = useState({ merchantName: '', subtotal: '', tax: '', serviceCharge: '', discount: '', total: '' });
-  const [showInvoicePreview, setShowInvoicePreview] = useState(false);
-  const [previewFileIndex, setPreviewFileIndex] = useState(0);
 
   const pagination = usePagination(rows);
 
@@ -594,25 +564,15 @@ function ExpensesPageInner() {
       .catch(() => undefined);
   }, [selectedAdvertiserIds]);
 
+  // Department is picked first: the caller's own Department(s) (every active one for Admin /
+  // expense.create.all, the API enforces the same). The Requestor list, Corporate Card list and
+  // the rest of the form follow the Department picked here.
   useEffect(() => {
-    const targetSalesId = canPickRequestor && onBehalfOfSalesId ? onBehalfOfSalesId : requestorRequired ? '' : user?.id;
-    if (!targetSalesId) {
-      setDepartmentOptions([]);
-      return;
-    }
-    const onBehalf = targetSalesId !== user?.id;
-    const path = onBehalf ? `/departments?salesId=${targetSalesId}&active=true` : '/departments/me';
-    // Without expense.create.all / Admin, only the caller's own Department(s) are valid (the API enforces it too).
-    const limitToMine = onBehalf && !canActOnBehalf && !hasPermission('expense.create.all');
+    const canAnyDepartment = canActOnBehalf || hasPermission('expense.create.all');
     let cancelled = false;
     api
-      .get<DepartmentOption[]>(path)
-      .then(async (opts) => {
-        if (limitToMine) {
-          const mine = await api.get<DepartmentOption[]>('/departments/me');
-          const mineIds = new Set(mine.map((d) => d.id));
-          opts = opts.filter((d) => mineIds.has(d.id));
-        }
+      .get<DepartmentOption[]>(canAnyDepartment ? '/departments?active=true' : '/departments/me')
+      .then((opts) => {
         if (!cancelled) setDepartmentOptions(opts);
       })
       .catch(() => undefined);
@@ -620,9 +580,22 @@ function ExpensesPageInner() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canPickRequestor, canActOnBehalf, requestorRequired, onBehalfOfSalesId, user?.id]);
+  }, [canActOnBehalf]);
 
-  // Department auto-fills to the Sales's own (first) Department once known - still changeable below.
+  // Requestors who belong to the picked Department (the caller themself is the "Myself" option).
+  const departmentRequestors = salesOptions.filter(
+    (s) => s.id !== user?.id && !!form.departmentId && !!s.departmentIds?.includes(form.departmentId),
+  );
+
+  const changeDepartment = (departmentId: string) => {
+    // Corporate Card belongs to the Department. The requestor stays only while still a member of the
+    // new Department; otherwise fall back to Myself / unpicked and re-derive the Unit.
+    const keep = !onBehalfOfSalesId || !!salesOptions.find((s) => s.id === onBehalfOfSalesId)?.departmentIds?.includes(departmentId);
+    if (!keep) setOnBehalfOfSalesId('');
+    setForm((f) => ({ ...f, departmentId, creditCardId: '', unitId: keep ? f.unitId : '' }));
+  };
+
+  // Department auto-fills to the caller's first Department once known - still changeable below.
   useEffect(() => {
     if (departmentOptions.length > 0 && !form.departmentId) {
       setForm((f) => (f.departmentId ? f : { ...f, departmentId: departmentOptions[0].id }));
@@ -645,7 +618,6 @@ function ExpensesPageInner() {
   }, [canPickRequestor, requestorRequired, onBehalfOfSalesId, salesOptions, user?.unitId]);
 
   useEffect(() => {
-    api.get<CategoryOption[]>('/expense-categories?active=true').then(setCategories).catch(() => undefined);
     if (canPickRequestor) {
       api.get<SalesOption[]>('/expenses/requestors').then(setSalesOptions).catch(() => undefined);
     }
@@ -678,8 +650,6 @@ function ExpensesPageInner() {
     setOcrWarnings([]);
     setOcrRaw(null);
     setInvoiceForm({ merchantName: '', subtotal: '', tax: '', serviceCharge: '', discount: '', total: '' });
-    setShowInvoicePreview(false);
-    setPreviewFileIndex(0);
   };
 
   // Auto-OCR every receipt image right after it's picked, so the form pre-fills
@@ -702,12 +672,10 @@ function ExpensesPageInner() {
 
     setOcrScanning(true);
     const warnings: string[] = [];
-    let scannedAny = false;
     try {
       for (const file of imagesToScan) {
         try {
           const result = (await uploadFile('/invoices/ocr-scan', file)) as ParsedReceipt;
-          scannedAny = true;
           setOcrRaw((prev) => prev ?? result);
           warnings.push(...result.warnings);
 
@@ -747,16 +715,8 @@ function ExpensesPageInner() {
     } finally {
       setOcrWarnings(warnings);
       setOcrScanning(false);
-      // Show the scanned data (merchant/items/total, all still editable) right
-      // away instead of leaving it behind a manual "Preview Invoice" click.
-      if (scannedAny) setShowInvoicePreview(true);
     }
   };
-
-  const addItem = () => setItems((prev) => [...prev, emptyItem()]);
-  const updateItem = (index: number, patch: Partial<ItemRow>) =>
-    setItems((prev) => prev.map((it, i) => (i === index ? { ...it, ...patch } : it)));
-  const removeItem = (index: number) => setItems((prev) => prev.filter((_, i) => i !== index));
 
   const addAgency = (agencyId: string) => {
     const a = agencyOptions.find((x) => x.id === agencyId);
@@ -781,21 +741,45 @@ function ExpensesPageInner() {
     setParticipants((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
   const removeParticipant = (index: number) => setParticipants((prev) => prev.filter((_, i) => i !== index));
 
+  // Which of the two submit buttons ("Save as Draft" / "Submit") fired the form -
+  // set from the button's onClick, which runs before the form's submit event.
+  const submitIsDraftRef = useRef(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (invoiceFiles.length > 0 && !invoiceForm.total) {
-      setError('Invoice Total is required — open Preview Invoice and fill it in.');
+    const isDraft = submitIsDraftRef.current;
+    // "Save as Draft" skips the browser's `required` checks (formNoValidate), so the
+    // fields the backend always needs are re-checked here. Payment Method / Corporate
+    // Card can stay empty on a draft and are only enforced on Submit.
+    if (!form.expenseDate || !form.purpose.trim() || !form.amount) {
+      setError('Expense Date, Purpose and Amount are required.');
       return;
     }
     if (!primaryAdvertiserId || !primaryBrandId || !form.unitId || !form.activityTypeId) {
       setError('Advertiser, Brand, Unit and Activity Type must all be picked.');
       return;
     }
-    if (!form.paymentMethodId) {
-      setError('Payment Method is required.');
-      return;
+    if (!isDraft) {
+      if (activityPhotos.length === 0) {
+        setError('Foto Kegiatan is required - upload at least one photo.');
+        return;
+      }
+      if (invoiceFiles.length === 0) {
+        setError('Foto Invoice is required - upload at least one invoice / receipt.');
+        return;
+      }
+      if (!form.paymentMethodId) {
+        setError('Payment Method is required.');
+        return;
+      }
+      if (selectedPaymentMethodCode === 'CORPORATE_CARD' && !form.creditCardId) {
+        setError('Corporate Card is required.');
+        return;
+      }
     }
     setSaving(true);
+    setSavingDraft(isDraft);
     setError('');
     try {
       const selectedPaymentMethod = paymentMethodOptions.find((m) => m.id === form.paymentMethodId);
@@ -808,6 +792,8 @@ function ExpensesPageInner() {
         paymentMethodNote: form.paymentMethodNote || undefined,
         advertiserId: primaryAdvertiserId,
         brandId: primaryBrandId,
+        // A new Expense enters the approval chain on create unless isDraft is set.
+        isDraft,
       };
       if (canPickRequestor && onBehalfOfSalesId) payload.salesId = onBehalfOfSalesId;
 
@@ -852,7 +838,7 @@ function ExpensesPageInner() {
         if (invoiceForm.tax) invoicePayload.finalTax = Number(invoiceForm.tax);
         if (invoiceForm.serviceCharge) invoicePayload.finalServiceCharge = Number(invoiceForm.serviceCharge);
         if (invoiceForm.discount) invoicePayload.finalDiscount = Number(invoiceForm.discount);
-        if (invoiceForm.total) invoicePayload.finalTotal = Number(invoiceForm.total);
+        invoicePayload.finalTotal = Number(invoiceForm.total || form.amount);
 
         const invoice = await api.post<{ id: string }>(`/expenses/${created.id}/invoices`, invoicePayload);
         for (const file of invoiceFiles) {
@@ -1176,24 +1162,42 @@ function ExpensesPageInner() {
 
       {showForm && (
         <form className="card" onSubmit={onSubmit}>
+          <div className="form-row" style={{ maxWidth: 360 }}>
+            <label>{canPickRequestor ? 'Department *' : 'Department'}</label>
+            <select required={canPickRequestor} value={form.departmentId} onChange={(e) => changeDepartment(e.target.value)}>
+              <option value="">{canPickRequestor ? 'Select department' : '- (optional)'}</option>
+              {departmentOptions.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {canPickRequestor && (
             <div className="form-row" style={{ maxWidth: 360 }}>
               <label>{requestorRequired ? 'Requestor (entry on behalf of) *' : 'Requestor'}</label>
               <select
                 value={onBehalfOfSalesId}
+                disabled={!form.departmentId}
                 onChange={(e) => {
                   setOnBehalfOfSalesId(e.target.value);
-                  // Department/Unit/Corporate Card belong to the requestor - re-derive them.
-                  setForm((f) => ({ ...f, departmentId: '', unitId: '', creditCardId: '' }));
+                  // Unit follows the requestor - re-derive it.
+                  setForm((f) => ({ ...f, unitId: '' }));
                 }}
               >
-                <option value="">{requestorRequired ? 'Select requestor' : `Myself (${user?.name ?? ''})`}</option>
-                {salesOptions.filter((s) => s.id !== user?.id).map((s) => (
+                <option value="">
+                  {!form.departmentId ? 'Select a Department first' : requestorRequired ? 'Select requestor' : `Myself (${user?.name ?? ''})`}
+                </option>
+                {departmentRequestors.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name} ({s.employeeId})
                   </option>
                 ))}
               </select>
+              {requestorRequired && form.departmentId && departmentRequestors.length === 0 && (
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>No requestor available in this department.</span>
+              )}
             </div>
           )}
 
@@ -1275,17 +1279,6 @@ function ExpensesPageInner() {
                       {locating ? '...' : '📍'}
                     </button>
                   </div>
-                </div>
-                <div className="form-row">
-                  <label>Department</label>
-                  <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
-                    <option value="">- (optional)</option>
-                    {departmentOptions.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
                 </div>
                 <div className="form-row">
                   <label>Payment Method *</label>
@@ -1428,11 +1421,9 @@ function ExpensesPageInner() {
                     <span style={{ color: 'var(--muted)', fontSize: 12 }}>Select an Advertiser above to pick its brands.</span>
                   ) : (
                     <div
+                      className="check-grid"
                       style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(4, 1fr)',
-                        gap: '4px 16px',
-                        maxHeight: 160,
+                        maxHeight: 200,
                         overflowY: 'auto',
                         border: '1px solid var(--border)',
                         borderRadius: 6,
@@ -1440,7 +1431,7 @@ function ExpensesPageInner() {
                       }}
                     >
                       {brandOptions.map((b) => (
-                        <label key={b.id} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <label key={b.id} className="check-item">
                           <input type="checkbox" checked={selectedBrands.some((sb) => sb.id === b.id)} onChange={() => toggleBrand(b)} />
                           {b.name}
                         </label>
@@ -1532,7 +1523,7 @@ function ExpensesPageInner() {
               </div>
 
               <div style={{ marginTop: 16 }}>
-                <label style={{ display: 'block', marginBottom: 8 }}>Upload Foto Kegiatan (optional, bisa lebih dari 1)</label>
+                <label style={{ display: 'block', marginBottom: 8 }}>Upload Foto Kegiatan * (bisa lebih dari 1)</label>
                 <FileOrCameraInput
                   accept="image/jpeg,image/png,image/webp"
                   cameraTitle="Foto Kegiatan"
@@ -1549,7 +1540,7 @@ function ExpensesPageInner() {
 
               <div style={{ marginTop: 16 }}>
                 <label style={{ display: 'block', marginBottom: 8 }}>
-                  Upload Invoice / Receipt (optional, image/pdf, bisa lebih dari 1) — struk foto (JPEG/PNG/WebP) akan
+                  Upload Foto Invoice / Receipt * (image/pdf, bisa lebih dari 1) — struk foto (JPEG/PNG/WebP) akan
                   di-scan otomatis pakai OCR
                 </label>
                 <FileOrCameraInput
@@ -1571,156 +1562,34 @@ function ExpensesPageInner() {
                     {w}
                   </div>
                 ))}
-
-                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <button type="button" className="btn" onClick={() => setShowInvoicePreview(true)}>
-                    <NavIcon name="search" /> Preview Invoice {ocrRaw ? '(from OCR, editable)' : ''}
-                  </button>
-                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {invoiceForm.merchantName || '(no merchant name)'} · {items.length} item{items.length === 1 ? '' : 's'} ·
-                    Total: {invoiceForm.total ? formatCurrency(invoiceForm.total) : <span className="error-text">required</span>}
-                  </span>
-                </div>
               </div>
             </>
           )}
 
-          <button
-            className="btn btn-primary"
-            type="submit"
-            disabled={saving || !!noSalesReason || !form.expenseDate}
-            style={{ marginTop: 16 }}
-          >
-            {saving ? 'Saving...' : 'Save Draft'}
-          </button>
-        </form>
-      )}
-
-      {showInvoicePreview && (
-        <Modal title="Invoice Preview" onClose={() => setShowInvoicePreview(false)} wide>
-          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 380px', minWidth: 320 }}>
-              {invoiceFiles.length > 0 ? (
-                <>
-                  {invoiceFiles.length > 1 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
-                      {invoiceFiles.map((f, i) => (
-                        <button
-                          key={`${f.name}-${i}`}
-                          type="button"
-                          className="btn"
-                          style={i === previewFileIndex ? { borderColor: 'var(--primary, #4f7cff)' } : undefined}
-                          onClick={() => setPreviewFileIndex(i)}
-                        >
-                          {f.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <LocalFileZoom file={invoiceFiles[previewFileIndex]} />
-                </>
-              ) : (
-                <div style={{ padding: 24, textAlign: 'center', color: 'var(--muted)', border: '1px dashed var(--border)', borderRadius: 6 }}>
-                  No invoice file uploaded yet.
-                </div>
-              )}
-            </div>
-
-            <div style={{ flex: '1 1 380px', minWidth: 320 }}>
-              <div className="form-row">
-                <label style={{ fontSize: 12 }}>Merchant Name</label>
-                <input value={invoiceForm.merchantName} onChange={(e) => setInvoiceForm({ ...invoiceForm, merchantName: e.target.value })} />
-              </div>
-
-              <div style={{ marginTop: 12 }}>
-                <div className="toolbar" style={{ marginBottom: 8 }}>
-                  <label style={{ margin: 0, fontSize: 12 }}>Items</label>
-                  <button type="button" className="btn" onClick={addItem}>
-                    + Add Item
-                  </button>
-                </div>
-                {items.map((item, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-                    <input
-                      placeholder="Item name"
-                      value={item.description}
-                      onChange={(e) => updateItem(i, { description: e.target.value })}
-                      style={{ flex: 2 }}
-                    />
-                    <NumberInput placeholder="Price" value={item.price} onChange={(v) => updateItem(i, { price: v })} style={{ flex: 1 }} />
-                    <span style={{ color: 'var(--muted)' }}>×</span>
-                    <NumberInput placeholder="Qty" value={item.qty} onChange={(v) => updateItem(i, { qty: v })} style={{ width: 56 }} />
-                    <span style={{ flex: 1, fontSize: 13, textAlign: 'right' }}>= {formatCurrency(itemSubtotal(item))}</span>
-                    <select value={item.categoryId} onChange={(e) => updateItem(i, { categoryId: e.target.value })} style={{ flex: 1 }}>
-                      <option value="">Category</option>
-                      {categories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button type="button" className="btn btn-danger" onClick={() => removeItem(i)}>
-                      Remove
-                    </button>
-                  </div>
-                ))}
-                {items.length === 0 && <div style={{ color: 'var(--muted)', fontSize: 12 }}>No items - expense amount above is used as-is.</div>}
-                {items.length > 0 && (
-                  <div style={{ textAlign: 'right', fontSize: 13, marginTop: 4 }}>
-                    Subtotal: <strong>{formatCurrency(items.reduce((sum, it) => sum + itemSubtotal(it), 0))}</strong>
-                  </div>
-                )}
-              </div>
-
-              <div className="form-grid" style={{ marginTop: 12 }}>
-                <div className="form-row">
-                  <label style={{ fontSize: 12 }}>Discount</label>
-                  <NumberInput value={invoiceForm.discount} onChange={(v) => setInvoiceForm({ ...invoiceForm, discount: v })} />
-                </div>
-                <div className="form-row">
-                  <label style={{ fontSize: 12 }}>Tax</label>
-                  <NumberInput value={invoiceForm.tax} onChange={(v) => setInvoiceForm({ ...invoiceForm, tax: v })} />
-                </div>
-                <div className="form-row">
-                  <label style={{ fontSize: 12 }}>Service Charge</label>
-                  <NumberInput value={invoiceForm.serviceCharge} onChange={(v) => setInvoiceForm({ ...invoiceForm, serviceCharge: v })} />
-                </div>
-                <div className="form-row">
-                  <label style={{ fontSize: 12 }}>Total *</label>
-                  <NumberInput
-                    required
-                    value={invoiceForm.total}
-                    onChange={(v) => setInvoiceForm({ ...invoiceForm, total: v })}
-                  />
-                  {!invoiceForm.total && <span className="error-text" style={{ fontSize: 11 }}>Total is required</span>}
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="btn"
-                style={{ marginTop: 8 }}
-                onClick={() => {
-                  const subtotal = items.reduce((sum, it) => sum + itemSubtotal(it), 0);
-                  const total = subtotal - (Number(invoiceForm.discount) || 0) + (Number(invoiceForm.tax) || 0) + (Number(invoiceForm.serviceCharge) || 0);
-                  setInvoiceForm((f) => ({ ...f, subtotal: String(subtotal), total: String(Math.max(0, total)) }));
-                }}
-              >
-                Auto-calc Subtotal &amp; Total from items
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={!invoiceForm.total}
-                style={{ marginTop: 16, display: 'block' }}
-                onClick={() => setShowInvoicePreview(false)}
-              >
-                Done
-              </button>
-            </div>
+          <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+            <button
+              className="btn"
+              type="submit"
+              formNoValidate
+              disabled={saving || !!noSalesReason || !form.expenseDate}
+              onClick={() => {
+                submitIsDraftRef.current = true;
+              }}
+            >
+              {saving && savingDraft ? 'Saving...' : 'Save as Draft'}
+            </button>
+            <button
+              className="btn btn-primary"
+              type="submit"
+              disabled={saving || !!noSalesReason || !form.expenseDate}
+              onClick={() => {
+                submitIsDraftRef.current = false;
+              }}
+            >
+              {saving && !savingDraft ? 'Submitting...' : 'Submit'}
+            </button>
           </div>
-        </Modal>
+        </form>
       )}
 
       {error && <div className="error-text">{error}</div>}

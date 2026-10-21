@@ -62,7 +62,7 @@ function MobileExpenseRequestsList() {
     .filter(
       (r) =>
         !q ||
-        [r.requestNo, r.requestedBy?.name, clientLabel(r), r.brands?.map((b) => b.brand.name).join(' '), r.agencies?.map((a) => a.agency.name).join(' '), r.greetingText, r.recipientAddress].some((v) => v?.toLowerCase().includes(q)),
+        [r.requestNo, r.requestedBy?.name, clientLabel(r), r.brands?.map((b) => b.brand.name).join(' '), r.agencies?.map((a) => a.agency.name).join(' '), r.greetingText, r.recipient, r.recipientAddress].some((v) => v?.toLowerCase().includes(q)),
     );
 
   const ready = rows && departmentIds;

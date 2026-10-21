@@ -21,12 +21,14 @@ interface SalesOption extends Option {
 }
 
 interface AdvertiserOption extends Option {
-  agencyId: string;
+  // AgencyAdvertiser links - an Advertiser can be served by several Agencies.
+  agencies: { agencyId: string }[];
 }
 
 interface DepartmentAssignment {
   id: string;
   agency: Option;
+  agencyId: string;
   brand: Option & { advertiser: Option };
 }
 
@@ -203,7 +205,7 @@ export default function DepartmentsPage() {
     setStagedApprovers([]);
   };
 
-  const advertisersForPickerAgency = advertisers.filter((a) => a.agencyId === pickerAgencyId);
+  const advertisersForPickerAgency = advertisers.filter((a) => a.agencies.some((l) => l.agencyId === pickerAgencyId));
 
   const onPickAgency = (agencyId: string) => {
     setPickerAgencyId(agencyId);
@@ -221,9 +223,10 @@ export default function DepartmentsPage() {
   const addStagedPairs = () => {
     const agency = agencies.find((a) => a.id === pickerAgencyId);
     if (!agency) return;
-    const alreadyStaged = new Set(stagedPairs.map((p) => p.brandId));
+    // Same Brand can be covered through several Agencies - only the Agency + Brand pair must be unique.
+    const alreadyStaged = new Set(stagedPairs.map((p) => `${p.agencyId}|${p.brandId}`));
     const newPairs = pickerBrandIds
-      .filter((brandId) => !alreadyStaged.has(brandId))
+      .filter((brandId) => !alreadyStaged.has(`${agency.id}|${brandId}`))
       .map((brandId) => {
         const brand = pickerBrands.find((b) => b.id === brandId)!;
         return { agencyId: agency.id, agencyName: agency.name, brandId: brand.id, brandName: brand.name };
@@ -234,7 +237,8 @@ export default function DepartmentsPage() {
     setPickerBrands([]);
   };
 
-  const removeStagedPair = (brandId: string) => setStagedPairs((prev) => prev.filter((p) => p.brandId !== brandId));
+  const removeStagedPair = (agencyId: string, brandId: string) =>
+    setStagedPairs((prev) => prev.filter((p) => !(p.agencyId === agencyId && p.brandId === brandId)));
 
   // A Position can only be staged once here (the backend upserts one User per
   // Position per Department anyway - @@unique([departmentId, positionId])).
@@ -282,8 +286,13 @@ export default function DepartmentsPage() {
     }
   };
 
+  const [manageAgencyId, setManageAgencyId] = useState('');
   const selectedDepartment = departments.find((d) => d.id === selectedDepartmentId) ?? null;
-  const selectedDepartmentUsedBrandIds = new Set(selectedDepartment?.assignments.map((a) => a.brand.id));
+  // Brands this Department already covers through the Agency picked in "manage" - the same Brand via
+  // another Agency is still allowed.
+  const selectedDepartmentUsedBrandIds = new Set(
+    selectedDepartment?.assignments.filter((a) => a.agencyId === manageAgencyId).map((a) => a.brand.id),
+  );
   const selectedDepartmentMembers = salesOptions.filter((s) => s.departments.some((d) => d.id === selectedDepartmentId));
 
   const [editName, setEditName] = useState('');
@@ -313,10 +322,9 @@ export default function DepartmentsPage() {
     }
   };
 
-  const [manageAgencyId, setManageAgencyId] = useState('');
   const [manageBrandId, setManageBrandId] = useState('');
   const [manageBrands, setManageBrands] = useState<Option[]>([]);
-  const manageAdvertisers = advertisers.filter((a) => a.agencyId === manageAgencyId);
+  const manageAdvertisers = advertisers.filter((a) => a.agencies.some((l) => l.agencyId === manageAgencyId));
   const [manageAdvertiserIds, setManageAdvertiserIds] = useState<string[]>([]);
 
   useEffect(() => {
@@ -528,11 +536,11 @@ export default function DepartmentsPage() {
                 </thead>
                 <tbody>
                   {stagedPairs.map((p) => (
-                    <tr key={p.brandId}>
+                    <tr key={`${p.agencyId}|${p.brandId}`}>
                       <td>{p.agencyName}</td>
                       <td>{p.brandName}</td>
                       <td>
-                        <button type="button" className="btn btn-danger" onClick={() => removeStagedPair(p.brandId)}>
+                        <button type="button" className="btn btn-danger" onClick={() => removeStagedPair(p.agencyId, p.brandId)}>
                           Remove
                         </button>
                       </td>

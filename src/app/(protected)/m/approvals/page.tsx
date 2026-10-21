@@ -72,6 +72,7 @@ interface ExpenseRequestRow {
   advertisers?: { advertiser: { name: string } }[];
   greetingText: string;
   sendDate: string;
+  recipient: string | null;
   recipientAddress: string;
   status: 'PENDING_APPROVAL' | 'BUDGET_INPUT' | 'CORSEC_VERIFICATION' | 'PROCEED' | 'REJECTED' | 'CANCELLED';
   approvalRequest: { currentStep: number; status: string; steps: (StepInfo & { status: string })[] } | null;
@@ -449,6 +450,7 @@ function MobileApprovalsList() {
               <br />
               “{r.greetingText}”
               <br />
+              {r.recipient && `${r.recipient} · `}
               {r.recipientAddress}
             </div>
             <div className="m-item-foot">

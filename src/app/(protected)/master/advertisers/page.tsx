@@ -18,12 +18,13 @@ interface Advertiser {
   code: string;
   name: string;
   isActive: boolean;
-  agency?: { id: string; name: string };
+  // AgencyAdvertiser link rows - an Advertiser can be served by several Agencies.
+  agencies?: { agencyId: string; agency: { id: string; name: string } }[];
 }
 
-// Advertiser sits between Agency and Brand (Agency -> Advertiser -> Brand) -
-// every Advertiser belongs to exactly one Agency. Brands are managed from the
-// Brand page (each Brand picks its owning Advertiser there), not here.
+// Advertiser sits between Agency and Brand - Agency <-> Advertiser is many-to-many,
+// so an Advertiser picks one or more Agencies. Brands are managed from the Brand
+// page (each Brand picks its owning Advertiser there), not here.
 export default function AdvertisersPage() {
   const { hasRole } = useAuth();
   const confirm = useConfirm();
@@ -35,7 +36,7 @@ export default function AdvertisersPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ code: '', name: '', agencyId: '' });
+  const [form, setForm] = useState({ code: '', name: '', agencyIds: [] as string[] });
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const pagination = usePagination(advertisers);
@@ -54,12 +55,12 @@ export default function AdvertisersPage() {
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
-    setForm({ code: '', name: '', agencyId: '' });
+    setForm({ code: '', name: '', agencyIds: [] as string[] });
   };
 
   const startEdit = (a: Advertiser) => {
     setEditingId(a.id);
-    setForm({ code: a.code, name: a.name, agencyId: a.agency?.id ?? '' });
+    setForm({ code: a.code, name: a.name, agencyIds: (a.agencies ?? []).map((l) => l.agencyId) });
     setShowForm(true);
   };
 
@@ -82,6 +83,10 @@ export default function AdvertisersPage() {
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (form.agencyIds.length === 0) {
+      setError('Select at least one Agency');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -131,15 +136,24 @@ export default function AdvertisersPage() {
               <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </div>
             <div className="form-row" style={{ gridColumn: '1 / -1' }}>
-              <label>Agency</label>
-              <select required value={form.agencyId} onChange={(e) => setForm({ ...form, agencyId: e.target.value })}>
-                <option value="">Select agency</option>
+              <label>Agencies ({form.agencyIds.length} selected)</label>
+              <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
                 {agencies.map((a) => (
-                  <option key={a.id} value={a.id}>
+                  <label key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '2px 0', fontWeight: 'normal' }}>
+                    <input
+                      type="checkbox"
+                      checked={form.agencyIds.includes(a.id)}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          agencyIds: e.target.checked ? [...form.agencyIds, a.id] : form.agencyIds.filter((id) => id !== a.id),
+                        })
+                      }
+                    />
                     {a.name}
-                  </option>
+                  </label>
                 ))}
-              </select>
+              </div>
             </div>
           </div>
           <button className="btn btn-primary" type="submit" disabled={saving} style={{ marginTop: 16 }}>
@@ -166,7 +180,7 @@ export default function AdvertisersPage() {
               <tr key={a.id}>
                 <td>{a.code}</td>
                 <td>{a.name}</td>
-                <td>{a.agency?.name ?? '-'}</td>
+                <td>{(a.agencies ?? []).map((l) => l.agency.name).join(', ') || '-'}</td>
                 <td>{a.isActive ? 'Yes' : 'No'}</td>
                 {canManage && (
                   <td>
