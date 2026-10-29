@@ -6,6 +6,7 @@ import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import RankedBarList from '@/components/RankedBarList';
 import DepartmentTotalsCard, { DepartmentTotal } from '@/components/DepartmentTotalsCard';
+import TopPartiesCards, { TopParties } from '@/components/TopPartiesCards';
 import { formatCompactCurrency, formatCurrency, SkeletonList, StatTile } from '@/lib/mobileUi';
 
 interface Bucket {
@@ -21,6 +22,7 @@ interface OdooDepartmentDashboard {
   topSales?: TopRow[];
   topDepartments?: TopRow[];
   byDepartment?: DepartmentTotal[];
+  topParties?: TopParties;
 }
 
 interface TopRow {
@@ -127,6 +129,7 @@ export default function DepartmentOdooDashboardView({
           </div>
 
           <DepartmentTotalsCard data={data.byDepartment} />
+          <TopPartiesCards data={data.topParties} />
 
           <div className="m-section-title">{chartTitle}</div>
           <div className="m-item" style={{ display: 'block' }}>

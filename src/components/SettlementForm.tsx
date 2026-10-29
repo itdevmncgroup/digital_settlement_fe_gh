@@ -2,11 +2,12 @@
 
 import { ReactNode, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/date';
 import DatePicker from '@/components/DatePicker';
+import MultiSelectDropdown from '@/components/MultiSelectDropdown';
 import NumberInput from '@/components/NumberInput';
 
 interface DepartmentOption {
@@ -118,6 +119,15 @@ interface ExistingSettlement {
 // settlement, Save Changes PATCHes it instead of creating a new one).
 export default function SettlementForm({ settlementId }: { settlementId?: string } = {}) {
   const router = useRouter();
+  // ?group=flower comes from the Settlement > Flower Bouquet list: Save/Back return there, and a new Settlement
+  // starts with Flower Bouquet picked (?group=entertainment preselects Entertainment).
+  const group = useSearchParams().get('group');
+  const listHref = group === 'flower' ? '/settlement/flower-bouquet' : '/settlement';
+  // Creating from a menu fixes the Activity Type and Metode Pembayaran: Entertainment = Entertainment paid by Corporate
+  // Card, Flower Bouquet = Flower Bouquet paid by AP Disbursement (a non-card payment, so the NON_CORPORATE_CARD group).
+  const fixedActivityName = group === 'flower' ? 'Flower Bouquet' : group === 'entertainment' ? 'Entertainment' : null;
+  const fixedPaymentGroup = group === 'flower' ? 'NON_CORPORATE_CARD' : group === 'entertainment' ? 'CORPORATE_CARD' : null;
+  const fixedPaymentLabel = group === 'flower' ? 'AP Disbursement' : 'Corporate Card';
   const { hasRole } = useAuth();
   const canManage = hasRole('ADMINISTRATOR');
   const isEdit = !!settlementId;
@@ -131,7 +141,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
 
   const [genActivityTypeIds, setGenActivityTypeIds] = useState<string[]>([]);
   const [genDepartmentId, setGenDepartmentId] = useState('');
-  // Karangan Bunga only: several Departments can be picked, purely as a filter on
+  // Flower Bouquet only: several Departments can be picked, purely as a filter on
   // where the Expenses come from - the Settlement itself stays in the logged-in
   // user's own Department (resolved server-side).
   const [genDepartmentIds, setGenDepartmentIds] = useState<string[]>([]);
@@ -155,11 +165,11 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
   const isParcelOnly =
     genActivityTypeIds.length === 1 && activityTypeOptions.find((a) => a.id === genActivityTypeIds[0])?.name === 'Parcel/Bingkisan';
 
-  // Karangan Bunga Settlements can span more than one Department, and any user may
+  // Flower Bouquet Settlements can span more than one Department, and any user may
   // pick any Department - even one holding a single Department of their own.
   const isKaranganBunga =
     genActivityTypeIds.length > 0 &&
-    genActivityTypeIds.every((id) => activityTypeOptions.find((a) => a.id === id)?.name === 'Karangan Bunga');
+    genActivityTypeIds.every((id) => activityTypeOptions.find((a) => a.id === id)?.name === 'Flower Bouquet');
 
   // Departments the search/credit-card/description below are scoped to.
   const searchDepartmentIds = isKaranganBunga ? genDepartmentIds : genDepartmentId ? [genDepartmentId] : [];
@@ -175,21 +185,32 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
     api.get<DepartmentOption[]>('/departments/me').then(setMyDepartments).catch(() => undefined);
   }, []);
 
-  // The Department a Karangan Bunga Settlement is filed under: the user's own one
+  // The Department a Flower Bouquet Settlement is filed under: the user's own one
   // (preferring one of the picked filter Departments) - same rule as the backend.
   const ownDepartment = myDepartments.find((d) => genDepartmentIds.includes(d.id)) ?? myDepartments[0];
 
-  // Entering Karangan Bunga mode keeps the single Department already picked.
+  // Entering Flower Bouquet mode keeps the single Department already picked.
   useEffect(() => {
     if (isKaranganBunga && genDepartmentIds.length === 0 && genDepartmentId) setGenDepartmentIds([genDepartmentId]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isKaranganBunga]);
 
-  const toggleDepartment = (id: string) =>
-    setGenDepartmentIds((prev) => (prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]));
+  useEffect(() => {
+    if (!isEdit && fixedPaymentGroup) setGenPaymentMethodGroup(fixedPaymentGroup);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
-    api.get<ActivityTypeOption[]>('/activity-types?active=true').then(setActivityTypeOptions).catch(() => undefined);
+    api
+      .get<ActivityTypeOption[]>('/activity-types?active=true')
+      .then((all) => {
+        setActivityTypeOptions(all);
+        if (!settlementId && fixedActivityName) {
+          setGenActivityTypeIds(all.filter((a) => a.name === fixedActivityName).map((a) => a.id));
+        }
+      })
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleActivityType = (id: string) =>
@@ -476,7 +497,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
         expenseIds: Array.from(selectedExpenseIds),
         allocations: buildAllocationPayload(),
       });
-      router.push('/settlement');
+      router.push(listHref);
     } catch (err) {
       setGenerateError(err instanceof ApiError ? err.message : 'Failed to save settlement');
     } finally {
@@ -494,7 +515,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
     setGenerateError('');
     try {
       await api.post('/settlements/from-selection', {
-        // Karangan Bunga: the picked Departments only say where the Expenses may
+        // Flower Bouquet: the picked Departments only say where the Expenses may
         // come from; the backend files the Settlement under the user's own one.
         departmentId: searchDepartmentIds[0],
         departmentIds: isKaranganBunga ? searchDepartmentIds : undefined,
@@ -503,7 +524,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
         creditCardId: genPaymentMethodGroup === 'CORPORATE_CARD' ? genCreditCardId || undefined : undefined,
         allocations: buildAllocationPayload(),
       });
-      router.push('/settlement');
+      router.push(listHref);
     } catch (err) {
       setGenerateError(err instanceof ApiError ? err.message : 'Failed to create settlement');
     } finally {
@@ -518,7 +539,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
     setGenerateError('');
     try {
       await api.post(`/settlements/${previewResult.existingDraftSettlement.id}/expenses`, { expenseIds: Array.from(selectedExpenseIds) });
-      router.push('/settlement');
+      router.push(listHref);
     } catch (err) {
       setGenerateError(err instanceof ApiError ? err.message : 'Failed to add expenses');
     } finally {
@@ -530,7 +551,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
     <div>
       <div className="toolbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Link href="/settlement" className="btn" title="Back to Settlement">
+          <Link href={listHref} className="btn" title="Back to Settlement">
             ← Back
           </Link>
           <h1 style={{ margin: 0 }}>{isEdit ? `Edit Settlement${existing ? ` ${existing.settlementNo}` : ''}` : 'Create Settlement'}</h1>
@@ -546,36 +567,10 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
       <div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px 16px' }}>
           <div className="form-row">
-            <label>Activity Type (optional — blank = any activity type)</label>
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: '4px 16px',
-                maxHeight: 80,
-                overflowY: 'auto',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                padding: 8,
-              }}
-            >
-              {activityTypeOptions.map((a) => (
-                <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'normal' }}>
-                  <input
-                    type="checkbox"
-                    style={{ width: 'auto' }}
-                    disabled={isEdit}
-                    checked={genActivityTypeIds.includes(a.id)}
-                    onChange={() => toggleActivityType(a.id)}
-                  />
-                  {a.name}
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="form-row">
-            <label>{isKaranganBunga ? 'Department (bisa lebih dari 1)' : 'Department'}</label>
-            {isKaranganBunga && !isEdit ? (
+            <label>{fixedActivityName && !isEdit ? 'Activity Type' : 'Activity Type (optional — blank = any activity type)'}</label>
+            {fixedActivityName && !isEdit ? (
+              <input readOnly value={fixedActivityName} />
+            ) : (
               <div
                 style={{
                   display: 'flex',
@@ -588,18 +583,30 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                   padding: 8,
                 }}
               >
-                {departmentOptions.map((d) => (
-                  <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'normal' }}>
+                {activityTypeOptions.map((a) => (
+                  <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'normal' }}>
                     <input
                       type="checkbox"
                       style={{ width: 'auto' }}
-                      checked={genDepartmentIds.includes(d.id)}
-                      onChange={() => toggleDepartment(d.id)}
+                      disabled={isEdit}
+                      checked={genActivityTypeIds.includes(a.id)}
+                      onChange={() => toggleActivityType(a.id)}
                     />
-                    {d.name}
+                    {a.name}
                   </label>
                 ))}
               </div>
+            )}
+          </div>
+          <div className="form-row">
+            <label>{isKaranganBunga ? 'Department (bisa lebih dari 1)' : 'Department'}</label>
+            {isKaranganBunga && !isEdit ? (
+              <MultiSelectDropdown
+                options={departmentOptions}
+                selectedIds={genDepartmentIds}
+                onChange={setGenDepartmentIds}
+                placeholder="Select Department(s)"
+              />
             ) : (
               <select value={genDepartmentId} disabled={isEdit} onChange={(e) => setGenDepartmentId(e.target.value)}>
                 <option value="">Select Department</option>
@@ -623,12 +630,18 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
             <label>Metode Pembayaran</label>
             <select
               value={genPaymentMethodGroup}
-              disabled={isEdit}
+              disabled={isEdit || !!fixedPaymentGroup}
               onChange={(e) => setGenPaymentMethodGroup(e.target.value as 'CORPORATE_CARD' | 'NON_CORPORATE_CARD' | '')}
             >
-              <option value="">Select Metode Pembayaran</option>
-              <option value="CORPORATE_CARD">Corporate Card</option>
-              <option value="NON_CORPORATE_CARD">Non Corporate Card</option>
+              {fixedPaymentGroup && !isEdit ? (
+                <option value={fixedPaymentGroup}>{fixedPaymentLabel}</option>
+              ) : (
+                <>
+                  <option value="">Select Metode Pembayaran</option>
+                  <option value="CORPORATE_CARD">Corporate Card</option>
+                  <option value="NON_CORPORATE_CARD">Non Corporate Card</option>
+                </>
+              )}
             </select>
           </div>
           {genPaymentMethodGroup === 'CORPORATE_CARD' && (

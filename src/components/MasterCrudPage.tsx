@@ -66,7 +66,8 @@ export default function MasterCrudPage({ title, apiPath, fields, columns }: Prop
 
   const startCreate = () => {
     setEditingId(null);
-    setForm({});
+    // A new row starts Active (the backend default); the checkbox lets the admin create it inactive.
+    setForm(Object.fromEntries(fields.filter((f) => f.type === 'checkbox' && f.key === 'isActive').map((f) => [f.key, true])));
     setImageFiles({});
     setShowForm(true);
   };

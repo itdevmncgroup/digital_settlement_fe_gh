@@ -1,3 +1,5 @@
+import { loginUrlFor } from './loginRedirect';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api/v1';
 
 export class ApiError extends Error {
@@ -16,7 +18,7 @@ function forceLogin() {
   localStorage.removeItem('accessToken');
   localStorage.removeItem('refreshToken');
   localStorage.removeItem('user');
-  window.location.href = '/login';
+  window.location.href = loginUrlFor(`${window.location.pathname}${window.location.search}`);
 }
 
 // The backend's access token is short-lived (JWT_ACCESS_EXPIRES_IN, 15m by

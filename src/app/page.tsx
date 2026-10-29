@@ -28,14 +28,13 @@ export default function RootPage() {
     ].find(([, perms]) => hasPermission(...(perms as string[])))?.[0] as string | undefined;
 
     // First desktop dashboard the user may open (same role/permission gate as the sidebar in AppShell).
-    // Expense first: it is the long-standing desktop landing page, Executive is still a placeholder.
+    // Expense first: it is the long-standing desktop landing page.
     // dashboard.read.* are the legacy all-dashboards permissions; each dashboard also has its own.
     const isBackOffice = hasRole('ADMINISTRATOR', 'MANAGEMENT');
     const desktopDashboard = (
       [
         ['/expense-dashboard', 'dashboard.expense.read.owndept'],
         ['/dashboard/settlement', 'dashboard.settlement.read.owndept'],
-        ['/dashboard/executive', 'dashboard.executive.read.owndept'],
       ] as const
     ).find(([, own]) => isBackOffice || hasPermission('dashboard.read.all', 'dashboard.read.owndept', own))?.[0];
 
@@ -53,6 +52,9 @@ export default function RootPage() {
       router.replace('/m/dashboard-management');
     } else if (canMobileDashboard && (hasRole('SALES') || viewMode === 'mobile')) {
       router.replace('/m/dashboard');
+    } else if ((hasRole('SALES') || viewMode === 'mobile') && firstMobilePage) {
+      // Mobile view never lands on a desktop page (AppShell would bounce it straight back).
+      router.replace(firstMobilePage);
     } else if (desktopDashboard) {
       router.replace(desktopDashboard);
     } else if (canMobileDashboard) {

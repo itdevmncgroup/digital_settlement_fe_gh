@@ -297,7 +297,7 @@ export default function MobileSettlementApprovalPage() {
         return (
           <div key={e.id} className="m-item" style={{ ['--tone' as string]: reviewed ? 'var(--success)' : 'var(--warning)', opacity: selectMode && !selectable ? 0.55 : 1 }}>
             <Link
-              href={`/expenses/${e.id}`}
+              href={`/m/expenses/${e.id}`}
               style={{ display: 'flex', gap: 10, textDecoration: 'none', color: 'inherit' }}
               onClick={(ev) => {
                 if (!selectMode) return;

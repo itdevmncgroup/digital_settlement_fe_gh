@@ -76,23 +76,9 @@ interface CategoryOption {
 }
 
 const STATUS_OPTIONS = [
-  'DRAFT',
-  'SUBMITTED',
-  'PENDING_APPROVAL',
-  'APPROVAL_HEAD_POD',
-  'APPROVAL_KOORDINATOR',
-  'APPROVAL_SUPERVISOR',
-  'APPROVAL_DEPT_HEAD',
-  'APPROVAL_DIV_HEAD',
-  'APPROVAL_BOD',
-  'APPROVAL_CO_CSO',
-  'APPROVAL_CO_CSO_1',
-  'APPROVAL_CO_CSO_2',
-  'REJECTED',
-  'REVISION',
-  'READY_TO_MATCHING',
-  'READY_TO_SETTLED',
-  'COMPLETE',
+  { value: 'COMPLETE', label: 'Complete' },
+  { value: 'PENDING_APPROVAL', label: 'Pending Approval' },
+  { value: 'REJECTED', label: 'Rejected' },
 ];
 
 function formatCurrency(value: number) {
@@ -326,8 +312,8 @@ export default function ExpenseAnalyticsDashboardPage() {
           <select value={draftStatus} onChange={(e) => setDraftStatus(e.target.value)} style={{ width: 150 }}>
             <option value="">All Status</option>
             {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s}
+              <option key={s.value} value={s.value}>
+                {s.label}
               </option>
             ))}
           </select>

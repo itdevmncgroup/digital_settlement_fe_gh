@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/date';
 import { clientLabel, POSITION_SALES_CS } from '@/lib/expenseRequests';
 import { formatCurrency, SkeletonList } from '@/lib/mobileUi';
+import { MATCH_FIRST_MESSAGE, mustMatchBeforeApprove } from '@/lib/expenseApproval';
 import NumberInput from '@/components/NumberInput';
 
 interface DocSummary {
@@ -23,11 +24,13 @@ interface DocSummary {
   advertiser: { name: string };
   brand: { name: string };
   activityType?: { name: string } | null;
+  status?: string;
+  isMatched?: boolean;
 }
 
 interface StepInfo {
   stepOrder: number;
-  position: { name: string };
+  position: { name: string; code?: string };
   resolvedApprover?: { id: string; name: string };
 }
 
@@ -59,7 +62,7 @@ interface PendingApproval {
 
 const STAGE_LABEL = { PRE_EVENT: 'Pre-Event', EXPENSES: 'Expenses', SETTLEMENT: 'Settlement' } as const;
 
-// Expense Request (Karangan Bunga) is a separate flow: GET /approvals/pending
+// Expense Request (Flower Bouquet) is a separate flow: GET /approvals/pending
 // leaves it out, so it comes from GET /expense-requests instead (same shape as
 // the desktop /expense-requests page).
 interface ExpenseRequestRow {
@@ -154,8 +157,9 @@ function MobileApprovalsList() {
       .get<PendingApproval[]>('/approvals/pending')
       // The API also returns look-ahead rows (later steps, read-scope) - without
       // webmobile.approval.read.owndept only what needs this user's approval right now
-      // belongs here, matching the dashboard count.
-      .then((all) => setRows(all.filter((r) => r.isMyTurn || seeDept)))
+      // belongs here, matching the dashboard count. Even with it, a document whose
+      // approver chain does not include this user is not theirs to approve - hidden.
+      .then((all) => setRows(all.filter((r) => r.isMyTurn || (seeDept && isInChain(r.steps)))))
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
     if (seeDept) {
       // Best-effort: only used to pick the Expense Requests of the user's own Department(s).
@@ -187,8 +191,14 @@ function MobileApprovalsList() {
     const step = requestStep(r);
     return !!step && (step.resolvedApprover?.id === user?.id || isAdmin);
   };
+  // Whether this user holds (or, as ADMIN, may act on) any tier of the document's approver chain.
+  const isInChain = (steps: StepInfo[]) => isAdmin || steps.some((s) => s.resolvedApprover?.id === user?.id);
+  // Expense Request: its Sales CS (budget) and Corsec (verify) stages are Position-gated, not part of `steps`.
+  const isRequestApprover = (r: ExpenseRequestRow) =>
+    isInChain(r.approvalRequest?.steps ?? []) || user?.position?.code === POSITION_SALES_CS || user?.position?.code === POSITION_CORSEC;
   const waitingInMyDept = (r: ExpenseRequestRow) =>
     seeDept &&
+    isRequestApprover(r) &&
     !!r.department &&
     departmentIds.has(r.department.id) &&
     (r.status === 'PENDING_APPROVAL' || r.status === 'BUDGET_INPUT' || r.status === 'CORSEC_VERIFICATION');
@@ -355,7 +365,11 @@ function MobileApprovalsList() {
             .filter((r) => selectedIds.has(r.expense!.id))
             .map((r) => ({
               label: r.expense!.expenseNo ?? r.expense!.id,
-              call: () => api.post(`/approvals/expense/${r.expense!.id}/${action}`, action === 'reject' ? { reason } : undefined),
+              // Flower Bouquet at the Sales Admin tier must be matched first - reported as a per-row failure.
+              call: () =>
+                action === 'approve' && mustMatchBeforeApprove(r.expense, r.steps.find((s) => s.stepOrder === r.currentStep)?.position.code)
+                  ? Promise.reject(new ApiError(400, MATCH_FIRST_MESSAGE))
+                  : api.post(`/approvals/expense/${r.expense!.id}/${action}`, action === 'reject' ? { reason } : undefined),
             }));
     setBulkBusy(true);
     let success = 0;
@@ -523,7 +537,8 @@ function MobileApprovalsList() {
           {expenseRows.map((r) => {
             const doc = r.expense ?? r.event;
             if (!doc) return null;
-            const href = r.expense ? `/expenses/${doc.id}` : `/events/${doc.id}`;
+            // No mobile Pre-Event page: an Event row is not a link.
+            const href = r.expense ? `/m/expenses/${doc.id}` : '#';
             const step = r.steps.find((s) => s.stepOrder === r.currentStep);
             const busy = busyId === r.id;
             const selectable = isSelectable(r);
@@ -535,6 +550,7 @@ function MobileApprovalsList() {
                   href={href}
                   style={{ textDecoration: 'none', color: 'inherit', display: 'flex', gap: 10 }}
                   onClick={(e) => {
+                    if (!r.expense) return e.preventDefault();
                     if (!selectMode) return;
                     e.preventDefault();
                     if (selectable) toggleSelected('expense', r.expense!.id);
@@ -576,7 +592,13 @@ function MobileApprovalsList() {
                 </Link>
                 {!selectMode && canActOn(step) && (
                   <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
-                    <button className="btn btn-approve" style={{ flex: 1, minWidth: 0 }} disabled={busy} onClick={() => act(r, 'approve')}>
+                    <button
+                      className="btn btn-approve"
+                      style={{ flex: 1, minWidth: 0 }}
+                      disabled={busy || mustMatchBeforeApprove(r.expense, step?.position.code)}
+                      title={mustMatchBeforeApprove(r.expense, step?.position.code) ? MATCH_FIRST_MESSAGE : undefined}
+                      onClick={() => act(r, 'approve')}
+                    >
                       Approve
                     </button>
                     {r.expense && (

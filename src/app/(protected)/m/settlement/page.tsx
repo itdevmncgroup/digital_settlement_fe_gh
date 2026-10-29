@@ -111,7 +111,7 @@ function MobileSettlementList() {
               r.expenses.map((e) => (
                 <Link
                   key={e.id}
-                  href={`/expenses/${e.id}`}
+                  href={`/m/expenses/${e.id}`}
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',

@@ -1,15 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { formatDate } from '@/lib/date';
 import DatePicker from '@/components/DatePicker';
 import DepartmentExpenseChart from '@/components/DepartmentExpenseChart';
-import TransactionTrendChart from '@/components/TransactionTrendChart';
-import StatusBreakdownChart from '@/components/StatusBreakdownChart';
+import MonthlyTrendChart from '@/components/MonthlyTrendChart';
+import StatusSummaryChart, { StatusSummaryRow } from '@/components/StatusSummaryChart';
 import ApprovalProgressBar from '@/components/ApprovalProgressBar';
-import SimpleBarChart from '@/components/SimpleBarChart';
+import ProcessingTimeChart from '@/components/ProcessingTimeChart';
 
 interface SettlementSummary {
   totalAmount: number;
@@ -32,13 +32,6 @@ interface GroupRow {
   transactionCount: number;
 }
 
-interface StatusRow {
-  key: string;
-  label: string;
-  count: number;
-  color: string;
-}
-
 interface TrendRow {
   month: string;
   total: number;
@@ -57,18 +50,9 @@ interface ProcessingTimeRow {
   id: string;
   name: string;
   averageDays: number;
-}
-
-interface RecentSettlementRow {
-  id: string;
-  settlementNo: string;
-  period: string;
-  departmentName: string;
-  submitterName: string;
-  transactionCount: number;
-  totalAmount: number;
-  approvalLevel: string;
-  status: string;
+  count?: number;
+  minDays?: number;
+  maxDays?: number;
 }
 
 interface DepartmentOption {
@@ -76,12 +60,21 @@ interface DepartmentOption {
   name: string;
 }
 
-interface UserOption {
-  id: string;
-  name: string;
-}
+const STATUS_OPTIONS = [
+  { value: 'COMPLETE', label: 'Complete' },
+  { value: 'PENDING_APPROVAL', label: 'Pending Approval' },
+  { value: 'REJECTED', label: 'Rejected' },
+];
 
-const STATUS_OPTIONS = ['DRAFT', 'APPROVAL_SLS_MAR_DIR', 'APPROVAL_VP_ACC_BIL_TAX_3TV', 'APPROVAL_CO_CFO_3TV', 'APPROVAL_HEAD_CORSEC', 'APPROVAL_SVP', 'COMPLETE', 'REJECTED'];
+// From = one month ago, To = today (yyyy-mm-dd, what the date pickers hold).
+function defaultToDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+function defaultFromDate() {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 1);
+  return d.toISOString().slice(0, 10);
+}
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value);
@@ -118,48 +111,35 @@ function DeltaBadge({ value, higherIsBetter, unit = '%' }: { value: number | nul
   );
 }
 
-function SettlementStatusBadge({ status }: { status: string }) {
-  const cls =
-    status === 'COMPLETE'
-      ? 'badge-success'
-      : status === 'REJECTED'
-      ? 'badge-danger'
-      : status === 'DRAFT'
-      ? 'badge-info'
-      : 'badge-warning';
-  return <span className={`badge ${cls}`}>{status}</span>;
-}
-
 export default function SettlementDashboardPage() {
   const { hasRole, hasPermission } = useAuth();
   const canViewAllDepartments = hasRole('ADMINISTRATOR') || hasPermission('dashboard.read.all');
 
-  const [draftFrom, setDraftFrom] = useState('');
-  const [draftTo, setDraftTo] = useState('');
+  // Default period: the last month up to today.
+  const [draftFrom, setDraftFrom] = useState(defaultFromDate);
+  const [draftTo, setDraftTo] = useState(defaultToDate);
   const [draftDepartmentId, setDraftDepartmentId] = useState('');
-  const [draftSubmitterId, setDraftSubmitterId] = useState('');
+  const [draftUnitId, setDraftUnitId] = useState('');
   const [draftStatus, setDraftStatus] = useState('');
 
-  const [appliedFilter, setAppliedFilter] = useState({ from: '', to: '', departmentId: '', submitterId: '', status: '' });
+  const [appliedFilter, setAppliedFilter] = useState({ from: draftFrom, to: draftTo, departmentId: '', requestorUnitId: '', status: '' });
 
+  const [unitOptions, setUnitOptions] = useState<{ id: string; name: string }[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
-  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
 
   const [summary, setSummary] = useState<SettlementSummary | null>(null);
   const [byPod, setByPod] = useState<GroupRow[]>([]);
-  const [statusRows, setStatusRows] = useState<StatusRow[]>([]);
+  const [statusRows, setStatusRows] = useState<StatusSummaryRow[]>([]);
   const [trend, setTrend] = useState<TrendRow[]>([]);
-  const [topSubmitters, setTopSubmitters] = useState<GroupRow[]>([]);
   const [approvalProgress, setApprovalProgress] = useState<ApprovalProgressRow[]>([]);
   const [processingTimeByPod, setProcessingTimeByPod] = useState<ProcessingTimeRow[]>([]);
-  const [recentSettlements, setRecentSettlements] = useState<RecentSettlementRow[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const path = canViewAllDepartments ? '/departments?active=true' : '/departments/me';
     api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
-    api.get<UserOption[]>('/users').then(setUserOptions).catch(() => undefined);
+    api.get<{ id: string; name: string }[]>('/units?active=true').then(setUnitOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canViewAllDepartments]);
 
@@ -169,22 +149,18 @@ export default function SettlementDashboardPage() {
     Promise.all([
       api.get<SettlementSummary>(`/dashboard/settlement-summary${qs}`),
       api.get<GroupRow[]>(`/dashboard/settlement-by-pod${qs}`),
-      api.get<StatusRow[]>(`/dashboard/settlement-status${qs}`),
+      api.get<StatusSummaryRow[]>(`/dashboard/settlement-status-summary${qs}`),
       api.get<TrendRow[]>(`/dashboard/settlement-trend${qs}`),
-      api.get<GroupRow[]>(`/dashboard/settlement-top-submitters${qs}`),
       api.get<ApprovalProgressRow[]>(`/dashboard/settlement-approval-progress${qs}`),
       api.get<ProcessingTimeRow[]>(`/dashboard/settlement-processing-time-by-pod${qs}`),
-      api.get<RecentSettlementRow[]>(`/dashboard/settlement-transactions${qs ? `${qs}&limit=10` : '?limit=10'}`),
     ])
-      .then(([s, pod, status, tr, top, progress, processing, recent]) => {
+      .then(([s, pod, status, tr, progress, processing]) => {
         setSummary(s);
         setByPod(pod);
         setStatusRows(status);
         setTrend(tr);
-        setTopSubmitters(top);
         setApprovalProgress(progress);
         setProcessingTimeByPod(processing);
-        setRecentSettlements(recent);
         setError('');
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load settlement dashboard'))
@@ -192,19 +168,33 @@ export default function SettlementDashboardPage() {
   }, [appliedFilter]);
 
   const applyFilter = () => {
-    setAppliedFilter({ from: draftFrom, to: draftTo, departmentId: draftDepartmentId, submitterId: draftSubmitterId, status: draftStatus });
+    setAppliedFilter({ from: draftFrom, to: draftTo, departmentId: draftDepartmentId, requestorUnitId: draftUnitId, status: draftStatus });
   };
 
+  // Clear puts everything back to the defaults, including the last-month period.
   const clearFilter = () => {
-    setDraftFrom('');
-    setDraftTo('');
+    const from = defaultFromDate();
+    const to = defaultToDate();
+    setDraftFrom(from);
+    setDraftTo(to);
     setDraftDepartmentId('');
-    setDraftSubmitterId('');
+    setDraftUnitId('');
     setDraftStatus('');
-    setAppliedFilter({ from: '', to: '', departmentId: '', submitterId: '', status: '' });
+    setAppliedFilter({ from, to, departmentId: '', requestorUnitId: '', status: '' });
   };
 
-  const hasAppliedFilter = Object.values(appliedFilter).some(Boolean);
+  // The period alone is not a filter - it always has a value (default: the last month).
+  const hasAppliedFilter = !!(appliedFilter.departmentId || appliedFilter.requestorUnitId || appliedFilter.status);
+
+  // The period the data was loaded for (the applied filter, not the pickers' unsaved edits).
+  const periodLabel =
+    appliedFilter.from && appliedFilter.to
+      ? `${formatDate(appliedFilter.from)} – ${formatDate(appliedFilter.to)}`
+      : appliedFilter.from
+        ? `from ${formatDate(appliedFilter.from)}`
+        : appliedFilter.to
+          ? `until ${formatDate(appliedFilter.to)}`
+          : 'all time';
 
   return (
     <div>
@@ -237,10 +227,10 @@ export default function SettlementDashboardPage() {
             </select>
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
-            Submitter
-            <select value={draftSubmitterId} onChange={(e) => setDraftSubmitterId(e.target.value)} style={{ width: 180 }}>
-              <option value="">All Submitters</option>
-              {userOptions.map((u) => (
+            Unit (requestor)
+            <select value={draftUnitId} onChange={(e) => setDraftUnitId(e.target.value)} style={{ width: 180 }}>
+              <option value="">All Units</option>
+              {unitOptions.map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.name}
                 </option>
@@ -252,8 +242,8 @@ export default function SettlementDashboardPage() {
             <select value={draftStatus} onChange={(e) => setDraftStatus(e.target.value)} style={{ width: 200 }}>
               <option value="">All Status</option>
               {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
+                <option key={s.value} value={s.value}>
+                  {s.label}
                 </option>
               ))}
             </select>
@@ -321,83 +311,37 @@ export default function SettlementDashboardPage() {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <div className="card">
-              <h3>Settlement by POD &amp; Submitter</h3>
-              <DepartmentExpenseChart data={byPod} />
+              <h3>Settlement by POD</h3>
+              <DepartmentExpenseChart data={byPod.map((p) => ({ ...p, subtitle: undefined }))} />
             </div>
             <div className="card">
               <h3>Settlement Status</h3>
-              <StatusBreakdownChart data={statusRows} />
-            </div>
-            <div className="card">
-              <h3>Settlement Trend</h3>
-              <TransactionTrendChart data={trend} />
+              <StatusSummaryChart data={statusRows} selectedKey={appliedFilter.status || undefined} />
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-            <div className="card">
-              <h3>Top Submitters</h3>
-              <DepartmentExpenseChart data={topSubmitters} />
-            </div>
+          <div className="card">
+            <h3>Settlement Trend per Month</h3>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6, marginBottom: 10 }}>{periodLabel}</div>
+            <MonthlyTrendChart data={trend} from={appliedFilter.from} to={appliedFilter.to} amountLabel="Total Settlement" />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <div className="card">
               <h3>Approval Progress</h3>
               <ApprovalProgressBar data={approvalProgress} />
             </div>
             <div className="card">
               <h3>Average Processing Time by POD</h3>
-              <SimpleBarChart data={processingTimeByPod.map((p) => ({ id: p.id, name: p.name, value: p.averageDays }))} valueSuffix="d" color="#5ec8f2" />
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6, marginBottom: 10 }}>
+                Settlement created → sent to Odoo · {periodLabel}
+              </div>
+              <ProcessingTimeChart data={processingTimeByPod} periodLabel={periodLabel} />
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
-            <div className="card">
-              <h3>Settlement Transactions</h3>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Settlement No.</th>
-                    <th>Period</th>
-                    <th>POD / Submitter</th>
-                    <th>Transaction Count</th>
-                    <th>Total Amount</th>
-                    <th>Approval Level</th>
-                    <th>Status</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentSettlements.map((r) => (
-                    <tr key={r.id}>
-                      <td>{r.settlementNo}</td>
-                      <td>{r.period}</td>
-                      <td>
-                        {r.departmentName}
-                        <span style={{ color: 'var(--muted)' }}> — {r.submitterName}</span>
-                      </td>
-                      <td>{r.transactionCount}</td>
-                      <td>{formatCurrency(Number(r.totalAmount))}</td>
-                      <td>{r.approvalLevel}</td>
-                      <td>
-                        <SettlementStatusBadge status={r.status} />
-                      </td>
-                      <td>
-                        <Link href="/settlement" className="btn">
-                          View
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
-                  {recentSettlements.length === 0 && (
-                    <tr>
-                      <td colSpan={8} style={{ color: 'var(--muted)' }}>No data</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </>
       ) : null}
     </div>

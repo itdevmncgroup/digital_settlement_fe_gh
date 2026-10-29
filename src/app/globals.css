@@ -214,17 +214,17 @@ h1, h2, h3 {
   overflow: hidden;
 }
 
-.brand-mark {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  border-radius: 9px;
-  background: var(--gradient-brand);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.4);
+/* MNC logo (components/BrandLogo). White chip: the wordmark is dark navy and
+   would vanish on the dark theme / sidebar. */
+.brand-logo {
+  display: block;
+  flex-shrink: 0;
+  width: auto;
+  max-width: 100%;
+  box-sizing: content-box;
+  padding: 3px 6px;
+  border-radius: 8px;
+  background: #fff;
 }
 
 .gradient-text {
@@ -534,18 +534,6 @@ tr {
 
 tr:hover td {
   background: var(--table-hover);
-}
-
-/* Matched row highlight - a light tint of --success over the surface color
-   (not a solid fill) so the default --text color it sits on top of stays at
-   its normal contrast ratio in both themes, instead of hardcoding a text
-   color that only works against one specific green. */
-tr.row-matched td {
-  background: color-mix(in srgb, var(--success) 14%, var(--surface));
-}
-
-tr.row-matched:hover td {
-  background: color-mix(in srgb, var(--success) 24%, var(--surface));
 }
 
 /* ---------- Buttons ---------- */
@@ -1026,17 +1014,7 @@ label {
 }
 
 .auth-mobile-logo {
-  width: 52px;
-  height: 52px;
-  border-radius: 14px;
-  background: var(--gradient-brand);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
   margin-bottom: 16px;
-  box-shadow: 0 6px 18px rgba(109, 123, 250, 0.35);
-  color: #fff;
 }
 
 .auth-mobile-subtitle {
@@ -1415,4 +1393,62 @@ label {
   20%, 80% { transform: translateX(2px); }
   30%, 50%, 70% { transform: translateX(-4px); }
   40%, 60% { transform: translateX(4px); }
+}
+
+/* ---------- Pill tabs (Approval, Flower Bouquet) ---------- */
+
+.pill-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 16px;
+  max-width: 100%;
+  overflow-x: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.pill-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pill-tab:hover {
+  color: var(--text);
+  background: var(--table-hover);
+}
+
+.pill-tab.active {
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.pill-tab-count {
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--badge-bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.pill-tab.active .pill-tab-count {
+  background: var(--primary-soft);
+  color: var(--primary);
 }

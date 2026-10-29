@@ -244,3 +244,74 @@
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+
+/* ---------- Compact row-action buttons (table Action columns) ---------- */
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.btn-xs,
+.btn-xs.btn-approve,
+.btn-xs.btn-reject,
+.btn-xs.btn-revise {
+  padding: 4px 11px;
+  gap: 5px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0;
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.btn-xs.btn-approve::before,
+.btn-xs.btn-reject::before,
+.btn-xs.btn-revise::before {
+  width: 12px;
+  height: 12px;
+}
+
+.btn-xs:hover,
+.btn-xs.btn-approve:hover,
+.btn-xs.btn-reject:hover,
+.btn-xs.btn-revise:hover {
+  transform: none;
+}
+
+.btn-xs.btn-primary:hover {
+  box-shadow: 0 3px 10px rgba(109, 123, 250, 0.35);
+}
+
+/* Soft (tinted) danger instead of the loud solid red - fills in on hover. */
+.btn-xs.btn-danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.btn-xs.btn-danger:hover {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+/* Icon-only square button (eye / link ...). */
+.btn-icon-xs,
+.btn-xs.btn-icon-xs {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 8px;
+}
+
+.btn-icon-xs svg {
+  width: 15px;
+  height: 15px;
+}

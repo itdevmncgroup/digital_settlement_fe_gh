@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { fetchAuthedBlobUrl } from '@/lib/api';
 import Modal from './Modal';
 import ZoomableImage from './ZoomableImage';
@@ -10,13 +10,15 @@ interface FileThumbProps {
   path: string;
   fileName: string;
   isImage: boolean;
+  /** Shown above the image in the full-size preview (e.g. the amounts to check the image against). */
+  previewHeader?: ReactNode;
 }
 
 // Already-uploaded file (photo or invoice) fetched via an authenticated
 // endpoint: shows an actual thumbnail for images, a document icon otherwise.
 // Clicking an image opens it full-size in a zoomable popup; a non-image opens
 // in a new tab for viewing (not a forced download).
-export default function FileThumb({ path, fileName, isImage }: FileThumbProps) {
+export default function FileThumb({ path, fileName, isImage, previewHeader }: FileThumbProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -138,6 +140,7 @@ export default function FileThumb({ path, fileName, isImage }: FileThumbProps) {
       )}
       {showPreview && url && (
         <Modal title={fileName} onClose={() => setShowPreview(false)} wide>
+          {previewHeader}
           <ZoomableImage src={url} alt={fileName} />
         </Modal>
       )}

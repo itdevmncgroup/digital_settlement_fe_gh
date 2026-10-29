@@ -21,7 +21,7 @@ export default function PermissionsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ code: '', description: '' });
+  const [form, setForm] = useState({ code: '', description: '', isActive: true });
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
 
@@ -44,12 +44,12 @@ export default function PermissionsPage() {
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
-    setForm({ code: '', description: '' });
+    setForm({ code: '', description: '', isActive: true });
   };
 
   const startEdit = (p: PermissionRow) => {
     setEditingId(p.id);
-    setForm({ code: p.code, description: p.description ?? '' });
+    setForm({ code: p.code, description: p.description ?? '', isActive: p.isActive });
     setShowForm(true);
   };
 
@@ -74,7 +74,7 @@ export default function PermissionsPage() {
     setSaving(true);
     setError('');
     try {
-      const payload = { code: form.code.trim(), description: form.description || undefined };
+      const payload = { code: form.code.trim(), description: form.description || undefined, isActive: form.isActive };
       if (editingId) {
         await api.patch(`/permissions/${editingId}`, payload);
       } else {
@@ -133,6 +133,12 @@ export default function PermissionsPage() {
             <div className="form-row" style={{ gridColumn: '1 / -1' }}>
               <label>Description (optional)</label>
               <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            </div>
+            <div className="form-row">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+                Active
+              </label>
             </div>
           </div>
           <button className="btn btn-primary" type="submit" disabled={saving} style={{ marginTop: 16 }}>

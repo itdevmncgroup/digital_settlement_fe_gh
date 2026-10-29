@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import DepartmentTotalsCard, { DepartmentTotal } from '@/components/DepartmentTotalsCard';
+import TopPartiesCards, { TopParties } from '@/components/TopPartiesCards';
 import { formatCompactCurrency, formatCurrency, SkeletonList, StatTile } from '@/lib/mobileUi';
 
 interface Bucket {
@@ -23,6 +24,7 @@ interface ApproverDashboard {
   complete: Bucket;
   pendingApprovalCount: number;
   byDepartment?: DepartmentTotal[];
+  topParties?: TopParties;
 }
 
 // Only tappable when something actually waits on this user.
@@ -116,6 +118,7 @@ export default function ApproverDashboardView({ title, endpoint }: { title: stri
           </div>
 
           <DepartmentTotalsCard data={data.byDepartment} />
+          <TopPartiesCards data={data.topParties} />
         </>
       )}
     </div>

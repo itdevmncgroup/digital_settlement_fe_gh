@@ -14,6 +14,36 @@ const ICONS: Record<string, ReactNode> = {
       <rect x="14" y="14" width="7" height="7" rx="1.2" />
     </>
   ),
+  'dashboard-transaction': (
+    <>
+      <path d="M3 3v18h18" />
+      <path d="M8 17v-5" />
+      <path d="M13 17V8" />
+      <path d="M18 17v-9" />
+    </>
+  ),
+  'dashboard-settlement': (
+    <>
+      <path d="M21.21 15.89A10 10 0 1 1 8 2.83" />
+      <path d="M22 12A10 10 0 0 0 12 2v10z" />
+    </>
+  ),
+  entertainment: (
+    <>
+      <path d="M8 22h8" />
+      <path d="M12 11v11" />
+      <path d="m19 3-7 8-7-8z" />
+    </>
+  ),
+  flower: (
+    <>
+      <path d="M12 5a3 3 0 1 1 3 3m-3-3a3 3 0 1 0-3 3m3-3v1M9 8a3 3 0 1 0 3 3M9 8h1m5 0a3 3 0 1 1-3 3m3-3h-1m-2 3v-1" />
+      <circle cx="12" cy="8" r="2" />
+      <path d="M12 10v12" />
+      <path d="M12 22c4.2 0 7-1.667 7-5-4.2 0-7 1.667-7 5z" />
+      <path d="M12 22c-4.2 0-7-1.667-7-5 4.2 0 7 1.667 7 5z" />
+    </>
+  ),
   expenses: (
     <>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />

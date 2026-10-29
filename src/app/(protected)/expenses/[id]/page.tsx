@@ -13,6 +13,7 @@ import LocalFileThumb from '@/components/LocalFileThumb';
 import Modal from '@/components/Modal';
 import { usePrompt } from '@/components/PromptDialog';
 import SplashLoader from '@/components/SplashLoader';
+import { MATCH_FIRST_MESSAGE, mustMatchBeforeApprove } from '@/lib/expenseApproval';
 
 interface InvoiceFile {
   id: string;
@@ -104,7 +105,7 @@ interface Expense {
   amount: string;
   status: string;
   salesId: string;
-  expenseRequestId: string | null; // set when raised by Corsec from an Expense Request (Karangan Bunga)
+  expenseRequestId: string | null; // set when raised by Corsec from an Expense Request (Flower Bouquet)
   costCenterId: string | null;
   sales: { name: string };
   unit: { name: string };
@@ -308,7 +309,7 @@ export default function ExpenseDetailPage() {
     !!expense &&
     (isOwnerOrBackOffice || completesPendingSalesAdmin || hasPermission('expense.edit.all', 'expense.edit.owndept')) &&
     !LOCKED_STATUSES.includes(expense.status);
-  // A Request-linked expense (Karangan Bunga) still waiting on its Sales Admin has no
+  // A Request-linked expense (Flower Bouquet) still waiting on its Sales Admin has no
   // approval chain yet, but its Level starts at the Sales Admin tier itself - so the
   // Sales Admin acts on it directly (Approve / Revise / Reject) rather than "submitting"
   // it and then approving their own step. The backend enters the chain on that action.
@@ -347,6 +348,8 @@ export default function ExpenseDetailPage() {
     !!currentStepInfo &&
     !awaitingCorsecInvoice &&
     (currentStepInfo.resolvedApprover?.id === user?.id || hasRole('ADMINISTRATOR') || isSalesAdminTier);
+  // Flower Bouquet at the Sales Admin tier: Approve stays disabled until the expense is matched.
+  const approveBlocked = mustMatchBeforeApprove(expense, currentStepInfo?.position.code);
   // Sends a DRAFT / PENDING_SALES_ADMIN expense into the approval chain - shown in the page
   // header and as the "Submit" button of the Edit Expense form (not while Approve/Revise apply).
   const showSubmitButton =
@@ -748,7 +751,12 @@ export default function ExpenseDetailPage() {
           )}
           {salesAdminActsDirectly || canAct ? (
             <>
-              <button className="btn btn-approve" disabled={busy} onClick={approve}>
+              <button
+                className="btn btn-approve"
+                disabled={busy || approveBlocked}
+                title={approveBlocked ? MATCH_FIRST_MESSAGE : undefined}
+                onClick={approve}
+              >
                 Approve
               </button>
               <button className="btn btn-revise" disabled={busy} onClick={revise}>

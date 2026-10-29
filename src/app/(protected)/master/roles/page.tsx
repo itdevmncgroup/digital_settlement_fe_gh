@@ -28,7 +28,7 @@ export default function RolesPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', description: '' });
+  const [form, setForm] = useState({ name: '', description: '', isActive: true });
 
   const load = () => {
     api.get<RoleRow[]>('/roles').then(setRoles).catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
@@ -42,12 +42,12 @@ export default function RolesPage() {
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
-    setForm({ name: '', description: '' });
+    setForm({ name: '', description: '', isActive: true });
   };
 
   const startEdit = (role: RoleRow) => {
     setEditingId(role.id);
-    setForm({ name: role.name, description: role.description ?? '' });
+    setForm({ name: role.name, description: role.description ?? '', isActive: role.isActive });
     setShowForm(true);
   };
 
@@ -72,7 +72,7 @@ export default function RolesPage() {
     setSaving(true);
     setError('');
     try {
-      const payload = { name: form.name.trim().toUpperCase().replace(/\s+/g, '_'), description: form.description || undefined };
+      const payload = { name: form.name.trim().toUpperCase().replace(/\s+/g, '_'), description: form.description || undefined, isActive: form.isActive };
       if (editingId) {
         await api.patch(`/roles/${editingId}`, payload);
       } else {
@@ -149,6 +149,12 @@ export default function RolesPage() {
             <div className="form-row" style={{ gridColumn: '1 / -1' }}>
               <label>Description (optional)</label>
               <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            </div>
+            <div className="form-row">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+                Active
+              </label>
             </div>
           </div>
           <button className="btn btn-primary" type="submit" disabled={saving} style={{ marginTop: 16 }}>

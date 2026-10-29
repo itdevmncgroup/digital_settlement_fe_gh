@@ -11,13 +11,14 @@ import NumberInput from '@/components/NumberInput';
 import DatePicker from '@/components/DatePicker';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
-import SearchBox from '@/components/SearchBox';
+import TransactionTotalsCards, { sumByBucket, TotalsBucket } from '@/components/TransactionTotalsCards';
 import LocalFileThumb from '@/components/LocalFileThumb';
-import FileThumb from '@/components/FileThumb';
+import ExpenseImagesModal from '@/components/ExpenseImagesModal';
 import FileOrCameraInput from '@/components/FileOrCameraInput';
 import SplashLoader from '@/components/SplashLoader';
 import { useToast } from '@/components/ToastProvider';
 import Modal from '@/components/Modal';
+import { useConfirm } from '@/components/ConfirmDialog';
 import ExpenseFromRequestModal from '@/components/ExpenseFromRequestModal';
 import { NavIcon } from '@/components/NavIcons';
 
@@ -31,6 +32,11 @@ function defaultFromDate() {
 }
 function defaultToDate() {
   return new Date().toISOString().slice(0, 10);
+}
+// Local calendar date (not UTC), for the Expense Date a draft falls back to.
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 interface BankTransactionRef {
@@ -56,34 +62,17 @@ interface ExpenseRow {
   amount: string;
   status: string;
   salesId: string;
+  // Who keyed it in (differs from salesId when entered on someone else's behalf).
+  createdById?: string | null;
   sales: { name: string };
   advertiser: { name: string; agencies?: { agency: { name: string } }[] } | null;
+  activityType: { name: string } | null;
   extraAgencies?: { agency: { name: string } }[];
   brand: { name: string };
   department: { id: string; name: string } | null;
   bankTransactions: BankTransactionRef[];
   isMatched: boolean;
   settlement: { id: string; settlementNo: string; status: string } | null;
-}
-
-interface ExpenseImagePhoto {
-  id: string;
-  fileName: string;
-  mimeType: string;
-}
-
-interface ExpenseImageInvoice {
-  id: string;
-  invoiceNumber: string | null;
-  finalTotal: string | null;
-  files: { id: string; fileName: string; mimeType: string }[];
-}
-
-interface ExpenseImages {
-  expenseNo: string;
-  amount: string;
-  photos: ExpenseImagePhoto[];
-  invoices: ExpenseImageInvoice[];
 }
 
 // Expense.isMatched is the source of truth (also true for a manual match with no
@@ -217,21 +206,19 @@ const PARTICIPANT_SECTIONS: { category: ParticipantCategory; label: string }[] =
   { category: 'EMPLOYEE', label: 'Employee' },
 ];
 
+// Status combobox: four buckets that together cover every status (the API's statusGroup - Draft = still with Sales,
+// Pending Approval = the approval tiers and what follows, Complete, Rejected).
 const STATUS_OPTIONS = [
-  'DRAFT',
-  'PENDING_SALES_ADMIN',
-  'APPROVAL_HEAD_POD',
-  'APPROVAL_KOORDINATOR',
-  'APPROVAL_SUPERVISOR',
-  'APPROVAL_DEPT_HEAD',
-  'APPROVAL_DIV_HEAD',
-  'APPROVAL_BOD',
-  'PENDING_APPROVAL',
-  'REJECTED',
-  'REVISION',
-  'SETTLED',
+  { value: 'DRAFT', label: 'Draft' },
+  { value: 'PENDING_APPROVAL', label: 'Pending Approval' },
+  { value: 'COMPLETE', label: 'Complete' },
+  { value: 'REJECTED', label: 'Rejected' },
 ];
 const ALL_STATUSES_VALUE = 'ALL';
+// Totals cards: Completed = fully done (APPROVED/SETTLED are legacy rows), Rejected = REJECTED, Pending = everything else.
+const COMPLETE_STATUSES = ['COMPLETE', 'APPROVED', 'SETTLED'];
+const expenseBucket = (status: string): TotalsBucket =>
+  COMPLETE_STATUSES.includes(status) ? 'complete' : status === 'REJECTED' ? 'rejected' : 'pending';
 const itemSubtotal = (item: ItemRow) => (Number(item.price) || 0) * (Number(item.qty) || 0);
 const emptyParticipant = (category: ParticipantCategory): ParticipantRow => ({ category, name: '', position: '', company: '' });
 
@@ -262,15 +249,17 @@ function TxnStatusBadge({ status }: { status: ScannedTransactionRow['status'] })
   return <span className={`badge ${cls}`}>{label}</span>;
 }
 
-export default function ExpensesPage() {
+// scope: Entertainment menu = every Expense except Flower Bouquet; Flower Bouquet menu = Flower Bouquet only
+// (those are raised from an Expense Request, so there is no "New Expense" form there).
+export default function ExpensesView({ scope = 'entertainment' }: { scope?: 'entertainment' | 'flower' }) {
   return (
     <Suspense fallback={<SplashLoader message="Loading" />}>
-      <ExpensesPageInner />
+      <ExpensesPageInner scope={scope} />
     </Suspense>
   );
 }
 
-function ExpensesPageInner() {
+function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
   const { hasRole, hasPermission, user } = useAuth();
   const canActOnBehalf = hasRole('ADMINISTRATOR');
   // expense.create.all/.owndept: key an Expense in on behalf of another user (the requestor
@@ -299,18 +288,20 @@ function ExpensesPageInner() {
 
   const [rows, setRows] = useState<ExpenseRow[]>([]);
   // Default view: all statuses, last 1 month - see defaultFromDate/defaultToDate.
-  const [status, setStatus] = useState(() => searchParams.get('status') ?? ALL_STATUSES_VALUE);
-  const [search, setSearch] = useState(() => searchParams.get('search') ?? '');
-  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '');
+  // A stale URL (older raw status values) falls back to All.
+  const [status, setStatus] = useState(() => {
+    const fromUrl = searchParams.get('statusGroup');
+    return STATUS_OPTIONS.some((o) => o.value === fromUrl) ? (fromUrl as string) : ALL_STATUSES_VALUE;
+  });
   const [error, setError] = useState('');
   const toast = useToast();
+  const confirm = useConfirm();
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [resendingId, setResendingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [matchingId, setMatchingId] = useState<string | null>(null);
   const [imagesExpenseId, setImagesExpenseId] = useState<string | null>(null);
-  const [imagesExpense, setImagesExpense] = useState<ExpenseImages | null>(null);
-  const [imagesLoading, setImagesLoading] = useState(false);
   const [statementModalOpen, setStatementModalOpen] = useState(false);
   const [statementPopup, setStatementPopup] = useState<{
     fileName: string;
@@ -324,6 +315,17 @@ function ExpensesPageInner() {
   const [fromDate, setFromDate] = useState(() => searchParams.get('fromDate') ?? defaultFromDate());
   const [toDate, setToDate] = useState(() => searchParams.get('toDate') ?? defaultToDate());
   const [matchedFilter, setMatchedFilter] = useState(() => searchParams.get('matched') ?? '');
+  // Agency / Advertiser / Amount are typed: the *Input values follow the keystrokes, the applied ones
+  // (what is sent to the API and kept in the URL) catch up after a short pause.
+  const [unitFilter, setUnitFilter] = useState(() => searchParams.get('requestorUnitId') ?? '');
+  const [agencyFilter, setAgencyFilter] = useState(() => searchParams.get('agency') ?? '');
+  const [advertiserFilter, setAdvertiserFilter] = useState(() => searchParams.get('advertiser') ?? '');
+  const [minAmountFilter, setMinAmountFilter] = useState(() => searchParams.get('minAmount') ?? '');
+  const [maxAmountFilter, setMaxAmountFilter] = useState(() => searchParams.get('maxAmount') ?? '');
+  const [agencyInput, setAgencyInput] = useState(agencyFilter);
+  const [advertiserInput, setAdvertiserInput] = useState(advertiserFilter);
+  const [minAmountInput, setMinAmountInput] = useState(minAmountFilter);
+  const [maxAmountInput, setMaxAmountInput] = useState(maxAmountFilter);
   const [filterDepartmentOptions, setFilterDepartmentOptions] = useState<DepartmentOption[]>([]);
   const [showAutoMatchModal, setShowAutoMatchModal] = useState(false);
   const [autoMatchFiles, setAutoMatchFiles] = useState<File[]>([]);
@@ -394,18 +396,33 @@ function ExpensesPageInner() {
   const [ocrScanning, setOcrScanning] = useState(false);
   const [ocrWarnings, setOcrWarnings] = useState<string[]>([]);
   const [ocrRaw, setOcrRaw] = useState<ParsedReceipt | null>(null);
-  const [invoiceForm, setInvoiceForm] = useState({ merchantName: '', subtotal: '', tax: '', serviceCharge: '', discount: '', total: '' });
+  // The invoice file the current scan belongs to, what that scan filled into the form, and the latest
+  // form for async code (see scanInvoice / removeInvoice).
+  const ocrFile = useRef<File | null>(null);
+  const ocrFilled = useRef<{ merchantName?: string; amount?: string; expenseDate?: string }>({});
+  const formRef = useRef(form);
+  formRef.current = form;
 
-  const pagination = usePagination(rows);
+  // Clicking a totals card narrows the table to that bucket (the cards keep showing every bucket's total).
+  const [bucketFilter, setBucketFilter] = useState<TotalsBucket | null>(null);
+  const tableRows = bucketFilter ? rows.filter((r) => expenseBucket(r.status) === bucketFilter) : rows;
+  const pagination = usePagination(tableRows);
 
   const buildListParams = () => {
     const params = new URLSearchParams();
-    if (status) params.set('status', status);
-    if (search) params.set('search', search);
+    // 'ALL' switches off the API's default (Settled only); a bucket is sent as statusGroup, which the API takes over from status.
+    params.set('status', ALL_STATUSES_VALUE);
+    if (status !== ALL_STATUSES_VALUE) params.set('statusGroup', status);
     if (departmentFilter) params.set('departmentId', departmentFilter);
     if (fromDate) params.set('fromDate', fromDate);
     if (toDate) params.set('toDate', toDate);
     if (matchedFilter) params.set('matched', matchedFilter);
+    params.set('activityGroup', scope === 'flower' ? 'FLOWER' : 'NON_FLOWER');
+    if (unitFilter) params.set('requestorUnitId', unitFilter);
+    if (agencyFilter) params.set('agency', agencyFilter);
+    if (advertiserFilter) params.set('advertiser', advertiserFilter);
+    if (minAmountFilter) params.set('minAmount', minAmountFilter);
+    if (maxAmountFilter) params.set('maxAmount', maxAmountFilter);
     return params;
   };
 
@@ -424,16 +441,34 @@ function ExpensesPageInner() {
     const qs = buildListParams().toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, search, departmentFilter, fromDate, toDate, matchedFilter]);
+  }, [status, departmentFilter, fromDate, toDate, matchedFilter, unitFilter, agencyFilter, advertiserFilter, minAmountFilter, maxAmountFilter]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setAgencyFilter(agencyInput.trim());
+      setAdvertiserFilter(advertiserInput.trim());
+      setMinAmountFilter(minAmountInput);
+      setMaxAmountFilter(maxAmountInput);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [agencyInput, advertiserInput, minAmountInput, maxAmountInput]);
 
   const resetFilters = () => {
     setStatus(ALL_STATUSES_VALUE);
-    setSearch('');
-    setSearchInput('');
     setDepartmentFilter('');
     setFromDate(defaultFromDate());
     setToDate(defaultToDate());
     setMatchedFilter('');
+    setBucketFilter(null);
+    setUnitFilter('');
+    setAgencyFilter('');
+    setAdvertiserFilter('');
+    setMinAmountFilter('');
+    setMaxAmountFilter('');
+    setAgencyInput('');
+    setAdvertiserInput('');
+    setMinAmountInput('');
+    setMaxAmountInput('');
   };
 
   // Bumps every time a file finishes auto-matching (see AutoMatchProvider) - refreshes
@@ -499,7 +534,7 @@ function ExpensesPageInner() {
   const exportPdf = () => {
     const win = window.open('', '_blank');
     if (!win) return;
-    const tableRows = rows
+    const pdfRows = tableRows
       .map(
         (r) => `<tr>
           <td>${r.expenseNo}</td>
@@ -525,7 +560,7 @@ function ExpensesPageInner() {
       <table><thead><tr>
         <th>Expense No</th><th>Date</th><th>Sales</th><th>Department</th><th>Advertiser</th><th>Brand</th>
         <th>Purpose</th><th>Amount</th><th>Status</th><th>Matching</th>
-      </tr></thead><tbody>${tableRows}</tbody></table>
+      </tr></thead><tbody>${pdfRows}</tbody></table>
     </body></html>`);
     win.document.close();
     win.focus();
@@ -536,7 +571,11 @@ function ExpensesPageInner() {
     api.get<AdvertiserOption[]>('/advertisers?active=true').then(setAdvertiserOptions).catch(() => undefined);
     api.get<AgencyOption[]>('/agencies?active=true').then(setAgencyOptions).catch(() => undefined);
     api.get<SimpleOption[]>('/units?active=true').then(setUnitOptions).catch(() => undefined);
-    api.get<SimpleOption[]>('/activity-types?active=true').then(setActivityTypeOptions).catch(() => undefined);
+    // The scope decides which Activity Types belong to this menu (Flower Bouquet is the Flower Bouquet one).
+    api
+      .get<SimpleOption[]>('/activity-types?active=true')
+      .then((all) => setActivityTypeOptions(all.filter((a) => (a.name === 'Flower Bouquet') === (scope === 'flower'))))
+      .catch(() => undefined);
     api.get<PaymentMethodOption[]>('/payment-methods?active=true').then(setPaymentMethodOptions).catch(() => undefined);
   }, []);
 
@@ -625,6 +664,8 @@ function ExpensesPageInner() {
   }, [canPickRequestor]);
 
   const resetForm = () => {
+    ocrFile.current = null;
+    ocrFilled.current = {};
     setForm({
       expenseDate: '',
       purpose: '',
@@ -649,73 +690,78 @@ function ExpensesPageInner() {
     setOcrScanning(false);
     setOcrWarnings([]);
     setOcrRaw(null);
-    setInvoiceForm({ merchantName: '', subtotal: '', tax: '', serviceCharge: '', discount: '', total: '' });
   };
 
-  // Auto-OCR every receipt image right after it's picked, so the form pre-fills
-  // before the Expense/Invoice even exist (this create form is single-shot -
-  // nothing is persisted until final submit). Best-effort: OCR failures never
-  // block manual entry (fail-open). An invoice can span more than one image
-  // (e.g. a long receipt photographed in two shots) - each new image gets
-  // scanned and merged into the existing result:
-  //  - merchantName: first one found wins - if image 1 didn't have a readable
-  //    name, image 2 (or later) fills it in.
-  //  - total: MUST come from that image's own Total/Grand Total line
-  //    (ParsedReceipt.total) - never falls back to subtotal. Whichever image's
-  //    total is found first is kept; later images don't overwrite it.
-  //  - items: concatenated across every scanned image.
+  // OCR (AWS Textract) only the FIRST invoice picked, right after it's chosen, so
+  // the form pre-fills before the Expense/Invoice even exist (this create form is
+  // single-shot - nothing is persisted until final submit). Only three values are
+  // taken from the receipt and put straight into the form: Merchant, Expense Date
+  // (the transaction date) and Amount (the receipt's own Total/Jumlah line -
+  // ParsedReceipt.total, never subtotal). A field the user already filled by hand
+  // is never overwritten. Later invoices are only attached, never scanned. Best-effort:
+  // OCR failures never block manual entry (fail-open). The backend only OCRs
+  // images, so a PDF as first invoice is attached without a scan.
   const onInvoiceFilesChange = async (newFiles: File[]) => {
+    const isFirstInvoice = invoiceFiles.length === 0;
     setInvoiceFiles((prev) => [...prev, ...newFiles]);
 
-    const imagesToScan = newFiles.filter((f) => f.type.startsWith('image/'));
-    if (imagesToScan.length === 0) return;
+    const firstFile = newFiles[0];
+    if (!isFirstInvoice || !firstFile) return;
+    await scanInvoice(firstFile);
+  };
 
+  const scanInvoice = async (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    ocrFile.current = file;
     setOcrScanning(true);
-    const warnings: string[] = [];
+    setOcrWarnings([]);
     try {
-      for (const file of imagesToScan) {
-        try {
-          const result = (await uploadFile('/invoices/ocr-scan', file)) as ParsedReceipt;
-          setOcrRaw((prev) => prev ?? result);
-          warnings.push(...result.warnings);
-
-          setInvoiceForm((f) => ({
-            merchantName: f.merchantName || result.merchantName || '',
-            subtotal: f.subtotal || (result.subtotal != null ? String(result.subtotal) : ''),
-            tax: f.tax || (result.tax != null ? String(result.tax) : ''),
-            serviceCharge: f.serviceCharge || (result.serviceCharge != null ? String(result.serviceCharge) : ''),
-            discount: f.discount,
-            total: f.total || (result.total != null ? String(result.total) : ''),
-          }));
-
-          if (result.items.length > 0) {
-            setItems((prev) => [
-              ...prev,
-              ...result.items.map((it) => ({
-                description: it.description,
-                price: String(it.unitPrice || it.lineTotal || 0),
-                qty: String(it.quantity > 0 ? it.quantity : 1),
-                categoryId: '',
-              })),
-            ]);
-          }
-
-          // Transaction date -> Expense Date (ISO yyyy-mm-dd, same shape DatePicker
-          // holds). Only while still empty: first scanned date wins, and a date the
-          // user already picked by hand is never overwritten.
-          setForm((f) => ({
-            ...f,
-            amount: !f.amount && result.total != null ? String(result.total) : f.amount,
-            expenseDate: !f.expenseDate && result.invoiceDate ? result.invoiceDate : f.expenseDate,
-          }));
-        } catch (err) {
-          warnings.push(err instanceof ApiError ? err.message : `OCR scan failed for ${file.name} - enter invoice details manually.`);
-        }
-      }
+      const result = (await uploadFile('/invoices/ocr-scan', file)) as ParsedReceipt;
+      // The scanned invoice was removed (or replaced) while the scan was running - drop the result.
+      if (ocrFile.current !== file) return;
+      setOcrRaw(result);
+      setOcrWarnings(result.warnings);
+      const current = formRef.current;
+      const scannedAmount = result.total != null ? String(result.total) : '';
+      // Remember exactly what the scan filled in, so removing this invoice can undo just that.
+      ocrFilled.current = {
+        merchantName: !current.merchantName && result.merchantName ? result.merchantName : undefined,
+        amount: !current.amount && scannedAmount ? scannedAmount : undefined,
+        expenseDate: !current.expenseDate && result.invoiceDate ? result.invoiceDate : undefined,
+      };
+      setForm((f) => ({
+        ...f,
+        merchantName: f.merchantName || result.merchantName || '',
+        amount: !f.amount && scannedAmount ? scannedAmount : f.amount,
+        expenseDate: !f.expenseDate && result.invoiceDate ? result.invoiceDate : f.expenseDate,
+      }));
+    } catch (err) {
+      if (ocrFile.current === file) setOcrWarnings([err instanceof ApiError ? err.message : `OCR scan failed for ${file.name} - enter invoice details manually.`]);
     } finally {
-      setOcrWarnings(warnings);
-      setOcrScanning(false);
+      if (ocrFile.current === file || ocrFile.current === null) setOcrScanning(false);
     }
+  };
+
+  // Removing the first invoice empties Merchant / Expense Date / Amount again - only those still
+  // holding the scanned value, so anything typed over since is kept - and the next invoice in line
+  // becomes the first one and is scanned in its place.
+  const removeInvoice = (index: number) => {
+    const rest = invoiceFiles.filter((_, i) => i !== index);
+    setInvoiceFiles(rest);
+    if (index !== 0) return;
+    const filled = ocrFilled.current;
+    const current = formRef.current;
+    ocrFilled.current = {};
+    ocrFile.current = null;
+    setOcrRaw(null);
+    setOcrWarnings([]);
+    setForm((f) => ({
+      ...f,
+      merchantName: filled.merchantName !== undefined && current.merchantName === filled.merchantName ? '' : f.merchantName,
+      amount: filled.amount !== undefined && current.amount === filled.amount ? '' : f.amount,
+      expenseDate: filled.expenseDate !== undefined && current.expenseDate === filled.expenseDate ? '' : f.expenseDate,
+    }));
+    if (rest[0]) void scanInvoice(rest[0]);
   };
 
   const addAgency = (agencyId: string) => {
@@ -749,18 +795,19 @@ function ExpensesPageInner() {
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const isDraft = submitIsDraftRef.current;
-    // "Save as Draft" skips the browser's `required` checks (formNoValidate), so the
-    // fields the backend always needs are re-checked here. Payment Method / Corporate
-    // Card can stay empty on a draft and are only enforced on Submit.
-    if (!form.expenseDate || !form.purpose.trim() || !form.amount) {
-      setError('Expense Date, Purpose and Amount are required.');
-      return;
-    }
-    if (!primaryAdvertiserId || !primaryBrandId || !form.unitId || !form.activityTypeId) {
-      setError('Advertiser, Brand, Unit and Activity Type must all be picked.');
-      return;
-    }
+    // "Save as Draft" skips the browser's `required` checks (formNoValidate) and every check
+    // below: a draft may hold nothing but an uploaded/scanned invoice, the rest is filled in
+    // later (the API defaults Unit / Activity Type and re-checks it all when the draft is
+    // submitted). Only Submit enforces them.
     if (!isDraft) {
+      if (!form.expenseDate || !form.purpose.trim() || !form.amount) {
+        setError('Expense Date, Purpose and Amount are required.');
+        return;
+      }
+      if (!primaryAdvertiserId || !primaryBrandId || !form.unitId || !form.activityTypeId) {
+        setError('Advertiser, Brand, Unit and Activity Type must all be picked.');
+        return;
+      }
       if (activityPhotos.length === 0) {
         setError('Foto Kegiatan is required - upload at least one photo.');
         return;
@@ -785,7 +832,11 @@ function ExpensesPageInner() {
       const selectedPaymentMethod = paymentMethodOptions.find((m) => m.id === form.paymentMethodId);
       const payload: Record<string, unknown> = {
         ...form,
-        amount: Number(form.amount),
+        // Empty fields of a draft are left out (not sent as '') so the API applies its defaults.
+        expenseDate: form.expenseDate || todayIso(),
+        unitId: form.unitId || undefined,
+        activityTypeId: form.activityTypeId || undefined,
+        amount: Number(form.amount) || 0,
         departmentId: form.departmentId || undefined,
         creditCardId: selectedPaymentMethod?.code === 'CORPORATE_CARD' ? form.creditCardId || undefined : undefined,
         paymentMethodId: form.paymentMethodId || undefined,
@@ -833,12 +884,8 @@ function ExpensesPageInner() {
           invoicePayload.ocrTotal = ocrRaw.total ?? undefined;
           invoicePayload.ocrConfidence = ocrRaw.confidence ?? undefined;
         }
-        if (invoiceForm.merchantName) invoicePayload.finalMerchantName = invoiceForm.merchantName;
-        if (invoiceForm.subtotal) invoicePayload.finalSubtotal = Number(invoiceForm.subtotal);
-        if (invoiceForm.tax) invoicePayload.finalTax = Number(invoiceForm.tax);
-        if (invoiceForm.serviceCharge) invoicePayload.finalServiceCharge = Number(invoiceForm.serviceCharge);
-        if (invoiceForm.discount) invoicePayload.finalDiscount = Number(invoiceForm.discount);
-        invoicePayload.finalTotal = Number(invoiceForm.total || form.amount);
+        if (form.merchantName) invoicePayload.finalMerchantName = form.merchantName;
+        invoicePayload.finalTotal = Number(form.amount);
 
         const invoice = await api.post<{ id: string }>(`/expenses/${created.id}/invoices`, invoicePayload);
         for (const file of invoiceFiles) {
@@ -869,6 +916,26 @@ function ExpensesPageInner() {
     }
   };
 
+  const deleteDraft = async (row: ExpenseRow) => {
+    const ok = await confirm({
+      title: 'Delete draft?',
+      message: `Draft ${row.expenseNo} will be permanently deleted. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setDeletingId(row.id);
+    setError('');
+    try {
+      await api.del(`/expenses/${row.id}`);
+      toast.success('Draft deleted.');
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete draft');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const manualMatch = async (expenseId: string) => {
     setMatchingId(expenseId);
     setError('');
@@ -884,20 +951,7 @@ function ExpensesPageInner() {
     }
   };
 
-  const openImages = async (expenseId: string) => {
-    setImagesExpenseId(expenseId);
-    setImagesExpense(null);
-    setImagesLoading(true);
-    try {
-      const detail = await api.get<ExpenseImages>(`/expenses/${expenseId}`);
-      setImagesExpense(detail);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load images');
-      setImagesExpenseId(null);
-    } finally {
-      setImagesLoading(false);
-    }
-  };
+  const openImages = (expenseId: string) => setImagesExpenseId(expenseId);
 
   const openStatementPopup = async (txn: BankTransactionRef) => {
     setStatementModalOpen(true);
@@ -929,14 +983,8 @@ function ExpensesPageInner() {
   return (
     <div>
       <div className="toolbar">
-        <h1>Expenses</h1>
+        <h1>{scope === 'flower' ? 'Flower Bouquet Expenses' : 'Entertainment'}</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <SearchBox
-            placeholder="Search expense no, purpose, sales, advertiser, brand..."
-            value={searchInput}
-            onChange={setSearchInput}
-            onSearch={() => setSearch(searchInput)}
-          />
           {canAutoMatch && (
             <button className="btn" onClick={() => setShowAutoMatchModal(true)}>
               <NavIcon name="search" /> Auto Match
@@ -957,7 +1005,7 @@ function ExpensesPageInner() {
               + New Expense from Request
             </button>
           )}
-          {canCreate && !isCorsec && (
+          {canCreate && !isCorsec && scope !== 'flower' && (
             <button
               className="btn btn-primary"
               onClick={() => {
@@ -971,6 +1019,12 @@ function ExpensesPageInner() {
         </div>
       </div>
 
+      <TransactionTotalsCards
+        totals={sumByBucket(rows, (r) => expenseBucket(r.status), (r) => r.amount)}
+        selected={bucketFilter}
+        onSelect={setBucketFilter}
+      />
+
       <div className="toolbar" style={{ marginTop: -4 }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ width: 200 }}>
@@ -982,13 +1036,12 @@ function ExpensesPageInner() {
             ))}
           </select>
           <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: 220 }}>
-            <option value="">Settled only</option>
+            <option value={ALL_STATUSES_VALUE}>All Status</option>
             {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s}
+              <option key={s.value} value={s.value}>
+                {s.label}
               </option>
             ))}
-            <option value={ALL_STATUSES_VALUE}>All statuses (incl. drafts, default)</option>
           </select>
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
             From
@@ -1003,6 +1056,40 @@ function ExpensesPageInner() {
             <option value="MATCHED">Matched</option>
             <option value="UNMATCHED">Not Matched</option>
           </select>
+          <select value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)} style={{ width: 170 }}>
+            <option value="">All Units (requestor)</option>
+            {unitOptions.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
+          <input
+            list="expense-filter-agencies"
+            placeholder="Search agency..."
+            value={agencyInput}
+            onChange={(e) => setAgencyInput(e.target.value)}
+            style={{ width: 170 }}
+          />
+          <datalist id="expense-filter-agencies">
+            {agencyOptions.map((a) => (
+              <option key={a.id} value={a.name} />
+            ))}
+          </datalist>
+          <input
+            list="expense-filter-advertisers"
+            placeholder="Search advertiser..."
+            value={advertiserInput}
+            onChange={(e) => setAdvertiserInput(e.target.value)}
+            style={{ width: 170 }}
+          />
+          <datalist id="expense-filter-advertisers">
+            {advertiserOptions.map((a) => (
+              <option key={a.id} value={a.name} />
+            ))}
+          </datalist>
+          <NumberInput placeholder="Min amount" value={minAmountInput} onChange={setMinAmountInput} style={{ width: 140 }} />
+          <NumberInput placeholder="Max amount" value={maxAmountInput} onChange={setMaxAmountInput} style={{ width: 140 }} />
           <button type="button" className="btn" onClick={resetFilters}>
             Reset
           </button>
@@ -1540,8 +1627,8 @@ function ExpensesPageInner() {
 
               <div style={{ marginTop: 16 }}>
                 <label style={{ display: 'block', marginBottom: 8 }}>
-                  Upload Foto Invoice / Receipt * (image/pdf, bisa lebih dari 1) — struk foto (JPEG/PNG/WebP) akan
-                  di-scan otomatis pakai OCR
+                  Upload Foto Invoice / Receipt * (image/pdf, bisa lebih dari 1) — invoice pertama (JPEG/PNG/WebP)
+                  di-scan otomatis pakai OCR untuk mengisi Merchant, Expense Date dan Amount
                 </label>
                 <FileOrCameraInput
                   accept="image/jpeg,image/png,image/webp,application/pdf"
@@ -1552,7 +1639,7 @@ function ExpensesPageInner() {
                 {invoiceFiles.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
                     {invoiceFiles.map((f, i) => (
-                      <LocalFileThumb key={`${f.name}-${i}`} file={f} onRemove={() => setInvoiceFiles((prev) => prev.filter((_, idx) => idx !== i))} />
+                      <LocalFileThumb key={`${f.name}-${i}`} file={f} onRemove={() => removeInvoice(i)} />
                     ))}
                   </div>
                 )}
@@ -1571,7 +1658,7 @@ function ExpensesPageInner() {
               className="btn"
               type="submit"
               formNoValidate
-              disabled={saving || !!noSalesReason || !form.expenseDate}
+              disabled={saving || ocrScanning || !!noSalesReason}
               onClick={() => {
                 submitIsDraftRef.current = true;
               }}
@@ -1600,16 +1687,12 @@ function ExpensesPageInner() {
             <tr>
               <th>Expense No</th>
               <th>Date</th>
-              <th>Sales</th>
               <th>Department</th>
               <th>Agency</th>
               <th>Advertiser</th>
-              <th>Brand</th>
-              <th>Purpose</th>
               <th>Amount</th>
               <th>Status</th>
               <th>Matching</th>
-              <th>Statement</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -1618,21 +1701,19 @@ function ExpensesPageInner() {
               const canEdit =
                 EDITABLE_STATUSES.includes(r.status) &&
                 (r.salesId === user?.id || canActOnBehalf || (r.status === 'PENDING_SALES_ADMIN' && hasRole('SALES_ADMIN')));
+              const canDeleteDraft =
+                r.status === 'DRAFT' && hasPermission('expense_draft.delete.own') && (r.createdById ?? r.salesId) === user?.id;
               const canResend = isPendingApprovalStatus(r.status) && (r.salesId === user?.id || canActOnBehalf);
               const matched = isMatched(r);
-              const txn = matchedTransaction(r);
               return (
-                <tr key={r.id} className={matched ? 'row-matched' : undefined}>
+                <tr key={r.id}>
                   <td>
                     <Link href={`/expenses/${r.id}`}>{r.expenseNo}</Link>
                   </td>
                   <td>{formatDate(r.expenseDate)}</td>
-                  <td>{r.sales?.name}</td>
                   <td>{r.department?.name || '-'}</td>
                   <td>{agencyNames(r)}</td>
                   <td>{r.advertiser?.name}</td>
-                  <td>{r.brand?.name}</td>
-                  <td>{r.purpose}</td>
                   <td>{formatCurrency(r.amount)}</td>
                   <td>
                     <StatusBadge status={r.status} />
@@ -1641,30 +1722,27 @@ function ExpensesPageInner() {
                     <span className={`badge ${matched ? 'badge-success' : 'badge-info'}`}>{matched ? 'Matched' : 'Not Matched'}</span>
                   </td>
                   <td>
-                    {txn ? (
-                      <button
-                        type="button"
-                        onClick={() => openStatementPopup(txn)}
-                        title="View transaction date and amount captured by scanner"
-                        style={{ background: 'none', border: 'none', padding: 0, color: 'var(--primary)', cursor: 'pointer', font: 'inherit', textAlign: 'left' }}
-                      >
-                        {txn.batch.fileName}
-                      </button>
-                    ) : (
-                      '-'
-                    )}
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div className="row-actions">
                       {canEdit && (
-                        <Link href={`/expenses/${r.id}`} className="btn">
+                        <Link href={`/expenses/${r.id}`} className="btn btn-xs">
                           Edit
                         </Link>
+                      )}
+                      {canDeleteDraft && (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-xs"
+                          disabled={deletingId === r.id}
+                          onClick={() => deleteDraft(r)}
+                          title="Delete this draft"
+                        >
+                          {deletingId === r.id ? 'Deleting...' : 'Delete'}
+                        </button>
                       )}
                       {canResend && (
                         <button
                           type="button"
-                          className="btn"
+                          className="btn btn-xs"
                           disabled={resendingId === r.id}
                           onClick={() => resendApprovalEmail(r.id)}
                           title="Resend the approval reminder email to the current approver"
@@ -1674,7 +1752,7 @@ function ExpensesPageInner() {
                       )}
                       <button
                         type="button"
-                        className="btn"
+                        className="btn btn-xs btn-icon-xs"
                         onClick={() => openImages(r.id)}
                         title="View activity and invoice photos"
                         aria-label="View activity and invoice photos"
@@ -1684,7 +1762,7 @@ function ExpensesPageInner() {
                       {canManualMatch && !matched && !isSettlementSubmitted(r) && (
                         <button
                           type="button"
-                          className="btn"
+                          className="btn btn-xs btn-icon-xs"
                           disabled={matchingId === r.id}
                           onClick={() => manualMatch(r.id)}
                           title={matchingId === r.id ? 'Matching...' : 'Manually mark this expense as Matched'}
@@ -1698,14 +1776,14 @@ function ExpensesPageInner() {
                 </tr>
               );
             })}
-            {rows.length === 0 && (
+            {tableRows.length === 0 && (
               <tr>
-                <td colSpan={13} style={{ color: 'var(--muted)' }}>No expenses</td>
+                <td colSpan={9} style={{ color: 'var(--muted)' }}>No expenses</td>
               </tr>
             )}
           </tbody>
         </table>
-        {rows.length > 0 && (
+        {tableRows.length > 0 && (
           <Pagination
             page={pagination.page}
             totalPages={pagination.totalPages}
@@ -1719,60 +1797,7 @@ function ExpensesPageInner() {
         )}
       </div>
 
-      {imagesExpenseId && (
-        <Modal title="Expense Images" onClose={() => setImagesExpenseId(null)} wide>
-          {imagesLoading && <div>Loading...</div>}
-          {!imagesLoading && imagesExpense && (
-            <>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '10px 14px',
-                  marginBottom: 16,
-                  borderRadius: 10,
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>Expense</div>
-                  <div style={{ fontWeight: 600 }}>{imagesExpense.expenseNo}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>Amount</div>
-                  <div style={{ fontWeight: 700, fontSize: 18 }}>{formatCurrency(imagesExpense.amount)}</div>
-                </div>
-              </div>
-              <strong>Activity Photos</strong>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 16 }}>
-                {imagesExpense.photos.map((p) => (
-                  <FileThumb key={p.id} path={`/expenses/photos/${p.id}/download`} fileName={p.fileName} isImage={p.mimeType.startsWith('image/')} />
-                ))}
-                {imagesExpense.photos.length === 0 && <div style={{ color: 'var(--muted)' }}>No activity photos</div>}
-              </div>
-              <strong>Invoice Photos</strong>
-              {imagesExpense.invoices.length === 0 && <div style={{ color: 'var(--muted)', marginTop: 8 }}>No invoices</div>}
-              {imagesExpense.invoices.map((inv) => (
-                <div key={inv.id} style={{ marginTop: 8 }}>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {inv.invoiceNumber || 'Invoice'}
-                    {inv.finalTotal != null && ` · ${formatCurrency(inv.finalTotal)}`}
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-                    {inv.files.map((f) => (
-                      <FileThumb key={f.id} path={`/invoices/files/${f.id}/download`} fileName={f.fileName} isImage={f.mimeType.startsWith('image/')} />
-                    ))}
-                    {inv.files.length === 0 && <div style={{ color: 'var(--muted)' }}>No files</div>}
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
-        </Modal>
-      )}
+      {imagesExpenseId && <ExpenseImagesModal expenseId={imagesExpenseId} onClose={() => setImagesExpenseId(null)} />}
 
       {statementModalOpen && (
         <Modal title="Statement Transaction" onClose={() => setStatementModalOpen(false)} wide>

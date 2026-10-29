@@ -5,9 +5,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { ApiError } from '@/lib/api';
-import { NavIcon } from '@/components/NavIcons';
+import BrandLogo from '@/components/BrandLogo';
 import SplashLoader from '@/components/SplashLoader';
 import { resolveViewMode, ViewMode, VIEW_STORAGE_KEY } from '@/lib/viewMode';
+import { clearLoggedOutMark, safeNextPath } from '@/lib/loginRedirect';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -21,7 +22,10 @@ export default function LoginPage() {
 
   // Preselect the saved choice, else the device default (client-only: needs window/localStorage).
   useEffect(() => {
-    setViewMode(resolveViewMode());
+    clearLoggedOutMark();
+    // Arriving from an email's "Mobile Mode" link: preselect the phone view.
+    const next = safeNextPath(new URLSearchParams(window.location.search).get('next'));
+    setViewMode(next && /[?&]view=mobile/.test(next) ? 'mobile' : resolveViewMode());
   }, []);
 
   const onSubmit = async (e: FormEvent) => {
@@ -36,7 +40,8 @@ export default function LoginPage() {
         /* storage blocked - falls back to device default */
       }
       setSignedIn(true);
-      router.replace('/');
+      // A deep link (e.g. from an email) brought us here: continue to it instead of the landing page.
+      router.replace(safeNextPath(new URLSearchParams(window.location.search).get('next')) ?? '/');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Login failed');
     } finally {
@@ -50,22 +55,8 @@ export default function LoginPage() {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={onSubmit}>
-        <div
-          style={{
-            width: 52,
-            height: 52,
-            borderRadius: 14,
-            background: 'var(--gradient-brand)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 24,
-            marginBottom: 16,
-            boxShadow: '0 6px 18px rgba(109, 123, 250, 0.35)',
-            color: '#fff',
-          }}
-        >
-          <NavIcon name="logo" />
+        <div style={{ marginBottom: 16 }}>
+          <BrandLogo height={56} />
         </div>
         <h2 className="gradient-text">Digital Settlement</h2>
         <p style={{ color: 'var(--muted)', marginTop: 0 }}>Sales Client Entertainment &amp; Expense Management System</p>

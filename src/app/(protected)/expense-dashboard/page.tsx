@@ -1,15 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/date';
+import ActivityTypeExpenseChart from '@/components/ActivityTypeExpenseChart';
 import DatePicker from '@/components/DatePicker';
 import DepartmentExpenseChart from '@/components/DepartmentExpenseChart';
 import DonutChart from '@/components/DonutChart';
-import SimpleBarChart from '@/components/SimpleBarChart';
-import TransactionTrendChart from '@/components/TransactionTrendChart';
+import GroupTransactionList from '@/components/GroupTransactionList';
+import GroupDetailModal from '@/components/GroupDetailModal';
+import StatusSummaryChart, { StatusSummaryRow } from '@/components/StatusSummaryChart';
+import MonthlyTrendChart from '@/components/MonthlyTrendChart';
 
 interface Summary {
   totalExpense: number;
@@ -41,19 +43,6 @@ interface TrendRow {
   count: number;
 }
 
-interface RecentTransactionRow {
-  id: string;
-  expenseNo: string;
-  expenseDate: string;
-  salesName: string;
-  departmentName: string;
-  agencyName: string;
-  advertiserName: string;
-  categoryNames: string;
-  amount: number;
-  status: string;
-}
-
 interface DepartmentOption {
   id: string;
   name: string;
@@ -64,30 +53,15 @@ interface ActivityTypeOption {
   name: string;
 }
 
+// Grouped buckets (the dashboard API maps each to every concrete status in it).
 const STATUS_OPTIONS = [
-  'DRAFT',
-  'SUBMITTED',
-  'PENDING_APPROVAL',
-  'APPROVAL_HEAD_POD',
-  'APPROVAL_KOORDINATOR',
-  'APPROVAL_SUPERVISOR',
-  'APPROVAL_DEPT_HEAD',
-  'APPROVAL_DIV_HEAD',
-  'APPROVAL_BOD',
-  'APPROVAL_CO_CSO',
-  'APPROVAL_CO_CSO_1',
-  'APPROVAL_CO_CSO_2',
-  'APPROVAL_SLS_MAR_DIR',
-  'APPROVAL_VP_ACC_BIL_TAX_3TV',
-  'APPROVAL_CO_CFO_3TV',
-  'APPROVAL_HEAD_CORSEC',
-  'APPROVAL_SVP',
-  'REJECTED',
-  'REVISION',
-  'READY_TO_MATCHING',
-  'READY_TO_SETTLED',
-  'COMPLETE',
+  { value: 'COMPLETE', label: 'Complete' },
+  { value: 'PENDING_APPROVAL', label: 'Pending Approval' },
+  { value: 'REJECTED', label: 'Rejected' },
 ];
+
+// Agency / Advertiser cards show only the top N; the "More" popup has the full ranking.
+const TOP_N = 5;
 
 const DONUT_COLORS = ['#8b7bfb', '#ef5da8', '#3fd085', '#f7b955', '#5ec8f2', '#ff8a5c', '#c68bff', '#4fd1c5'];
 
@@ -110,18 +84,6 @@ function buildQuery(params: Record<string, string>) {
   }
   const qs = qp.toString();
   return qs ? `?${qs}` : '';
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const cls =
-    status === 'APPROVED' || status === 'SETTLED' || status === 'COMPLETE'
-      ? 'badge-success'
-      : status === 'REJECTED'
-      ? 'badge-danger'
-      : status === 'PENDING_APPROVAL' || status.startsWith('APPROVAL_')
-      ? 'badge-warning'
-      : 'badge-info';
-  return <span className={`badge ${cls}`}>{status}</span>;
 }
 
 // vs-previous-period delta line, e.g. "↑ 8.4% vs previous period" - omitted
@@ -149,11 +111,13 @@ export default function ExpenseDashboardPage() {
   });
   const [draftTo, setDraftTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [draftDepartmentId, setDraftDepartmentId] = useState('');
+  const [draftUnitId, setDraftUnitId] = useState('');
   const [draftActivityTypeId, setDraftActivityTypeId] = useState('');
   const [draftStatus, setDraftStatus] = useState('');
 
-  const [appliedFilter, setAppliedFilter] = useState({ from: draftFrom, to: draftTo, departmentId: '', activityTypeId: '', status: '' });
+  const [appliedFilter, setAppliedFilter] = useState({ from: draftFrom, to: draftTo, departmentId: '', requestorUnitId: '', activityTypeId: '', status: '' });
 
+  const [unitOptions, setUnitOptions] = useState<{ id: string; name: string }[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
   const [activityTypeOptions, setActivityTypeOptions] = useState<ActivityTypeOption[]>([]);
 
@@ -163,7 +127,9 @@ export default function ExpenseDashboardPage() {
   const [byActivityType, setByActivityType] = useState<GroupRow[]>([]);
   const [byPod, setByPod] = useState<GroupRow[]>([]);
   const [trend, setTrend] = useState<TrendRow[]>([]);
-  const [recentTransactions, setRecentTransactions] = useState<RecentTransactionRow[]>([]);
+  const [statusRows, setStatusRows] = useState<StatusSummaryRow[]>([]);
+  // Which Top-5 card's "More" popup is open.
+  const [moreOpen, setMoreOpen] = useState<'agency' | 'advertiser' | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -171,6 +137,7 @@ export default function ExpenseDashboardPage() {
     const path = canViewAllDepartments ? '/departments?active=true' : '/departments/me';
     api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     api.get<ActivityTypeOption[]>('/activity-types?active=true').then(setActivityTypeOptions).catch(() => undefined);
+    api.get<{ id: string; name: string }[]>('/units?active=true').then(setUnitOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canViewAllDepartments]);
 
@@ -184,16 +151,16 @@ export default function ExpenseDashboardPage() {
       api.get<GroupRow[]>(`/dashboard/expense-by-activity-type${qs}`),
       api.get<GroupRow[]>(`/dashboard/expense-by-department${qs}`),
       api.get<TrendRow[]>(`/dashboard/expense-by-month${qs}`),
-      api.get<RecentTransactionRow[]>(`/dashboard/recent-transactions${qs ? `${qs}&limit=10` : '?limit=10'}`),
+      api.get<StatusSummaryRow[]>(`/dashboard/expense-status${qs}`),
     ])
-      .then(([s, agency, advertiser, activityType, pod, t, r]) => {
+      .then(([s, agency, advertiser, activityType, pod, t, st]) => {
         setSummary(s);
         setByAgency(agency);
         setByAdvertiser(advertiser);
         setByActivityType(activityType);
         setByPod(pod);
         setTrend(t);
-        setRecentTransactions(r);
+        setStatusRows(st);
         setError('');
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load dashboard'))
@@ -201,17 +168,18 @@ export default function ExpenseDashboardPage() {
   }, [appliedFilter]);
 
   const applyFilter = () => {
-    setAppliedFilter({ from: draftFrom, to: draftTo, departmentId: draftDepartmentId, activityTypeId: draftActivityTypeId, status: draftStatus });
+    setAppliedFilter({ from: draftFrom, to: draftTo, departmentId: draftDepartmentId, requestorUnitId: draftUnitId, activityTypeId: draftActivityTypeId, status: draftStatus });
   };
 
   const clearFilter = () => {
     setDraftDepartmentId('');
+    setDraftUnitId('');
     setDraftActivityTypeId('');
     setDraftStatus('');
-    setAppliedFilter((f) => ({ ...f, departmentId: '', activityTypeId: '', status: '' }));
+    setAppliedFilter((f) => ({ ...f, departmentId: '', requestorUnitId: '', activityTypeId: '', status: '' }));
   };
 
-  const hasAppliedFilter = !!(appliedFilter.departmentId || appliedFilter.activityTypeId || appliedFilter.status);
+  const hasAppliedFilter = !!(appliedFilter.departmentId || appliedFilter.requestorUnitId || appliedFilter.activityTypeId || appliedFilter.status);
 
   // No PDF-generation library on the backend (see CLAUDE.md) - build a
   // printable summary client-side and let the browser's print dialog "Save as
@@ -220,20 +188,11 @@ export default function ExpenseDashboardPage() {
     if (!summary) return;
     const win = window.open('', '_blank');
     if (!win) return;
-    const rows = recentTransactions
-      .map(
-        (r) => `<tr>
-          <td>${r.expenseNo}</td>
-          <td>${formatDate(r.expenseDate)}</td>
-          <td>${r.salesName}${r.departmentName !== '-' ? ` / ${r.departmentName}` : ''}</td>
-          <td>${r.agencyName}</td>
-          <td>${r.advertiserName}</td>
-          <td>${r.categoryNames}</td>
-          <td>${formatCurrency(r.amount)}</td>
-          <td>${r.status}</td>
-        </tr>`,
-      )
-      .join('');
+    const topTable = (title: string, data: GroupRow[], showPic = true) => `<h3>${title}</h3>
+      <table><thead><tr><th>#</th><th>Name</th>${showPic ? '<th>PIC</th>' : ''}<th>Transactions</th><th>Total Expense</th></tr></thead><tbody>${data
+        .slice(0, TOP_N)
+        .map((r, i) => `<tr><td>${i + 1}</td><td>${r.name}</td>${showPic ? `<td>${r.subtitle ?? '-'}</td>` : ''}<td>${r.transactionCount}</td><td>${formatCurrency(Number(r.totalExpense))}</td></tr>`)
+        .join('')}</tbody></table>`;
     win.document.write(`<!doctype html><html><head><title>Expense Dashboard Report</title><style>
       body { font-family: sans-serif; font-size: 12px; }
       table { width: 100%; border-collapse: collapse; margin-top: 12px; }
@@ -251,35 +210,40 @@ export default function ExpenseDashboardPage() {
         <div>Pending Approval<br/><strong>${summary.pendingApprovalCount} (${formatCurrency(summary.pendingApprovalAmount)})</strong></div>
         <div>Rejected<br/><strong>${summary.rejectedCount} (${formatCurrency(summary.rejectedAmount)})</strong></div>
       </div>
-      <h3>Recent Transactions</h3>
-      <table><thead><tr>
-        <th>Expense No</th><th>Date</th><th>Sales/POD</th><th>Agency &amp; PIC</th><th>Advertiser &amp; PIC</th>
-        <th>Category</th><th>Amount</th><th>Status</th>
-      </tr></thead><tbody>${rows}</tbody></table>
+      ${topTable('Top 5 Expense by Agency', byAgency, false)}
+      ${topTable('Top 5 Expense by Advertiser', byAdvertiser, false)}
     </body></html>`);
     win.document.close();
     win.focus();
     win.print();
   };
 
-  const statusDonutRows = summary
-    ? [
-        { id: 'approved', label: 'Approved', value: summary.approved, color: 'var(--success)' },
-        { id: 'pending', label: 'Pending', value: summary.pending, color: 'var(--warning)' },
-        { id: 'rejected', label: 'Rejected', value: summary.rejected, color: 'var(--danger)' },
-        { id: 'draft', label: 'Draft', value: summary.draft, color: '#5ec8f2' },
-      ].filter((r) => r.value > 0)
-    : [];
+  const topAgencies = byAgency.slice(0, TOP_N);
+  const topAdvertisers = byAdvertiser.slice(0, TOP_N);
 
-  const advertiserDonutRows = byAdvertiser.map((row, i) => ({
+  const agencyDonutRows = topAgencies.map((row, i) => ({
     id: row.id,
     label: row.name,
-    subtitle: row.subtitle,
     value: Number(row.totalExpense),
     color: DONUT_COLORS[i % DONUT_COLORS.length],
   }));
 
-  const activityTypeBarRows = byActivityType.map((row) => ({ id: row.id, name: row.name, value: Number(row.totalExpense) }));
+  const advertiserDonutRows = topAdvertisers.map((row, i) => ({
+    id: row.id,
+    label: row.name,
+    value: Number(row.totalExpense),
+    color: DONUT_COLORS[i % DONUT_COLORS.length],
+  }));
+
+  // The period the data was loaded for (the applied filter, not the pickers' unsaved edits).
+  const periodLabel =
+    appliedFilter.from && appliedFilter.to
+      ? `${formatDate(appliedFilter.from)} – ${formatDate(appliedFilter.to)}`
+      : appliedFilter.from
+        ? `from ${formatDate(appliedFilter.from)}`
+        : appliedFilter.to
+          ? `until ${formatDate(appliedFilter.to)}`
+          : 'all time';
 
   return (
     <div>
@@ -300,6 +264,14 @@ export default function ExpenseDashboardPage() {
               </option>
             ))}
           </select>
+          <select value={draftUnitId} onChange={(e) => setDraftUnitId(e.target.value)} style={{ width: 170 }}>
+            <option value="">All Units (requestor)</option>
+            {unitOptions.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
           <select value={draftActivityTypeId} onChange={(e) => setDraftActivityTypeId(e.target.value)} style={{ width: 150 }}>
             <option value="">All Activity Types</option>
             {activityTypeOptions.map((c) => (
@@ -311,8 +283,8 @@ export default function ExpenseDashboardPage() {
           <select value={draftStatus} onChange={(e) => setDraftStatus(e.target.value)} style={{ width: 150 }}>
             <option value="">All Status</option>
             {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s}
+              <option key={s.value} value={s.value}>
+                {s.label}
               </option>
             ))}
           </select>
@@ -384,90 +356,73 @@ export default function ExpenseDashboardPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
             <div className="card">
-              <h3>Expense by Agency &amp; PIC</h3>
-              <DepartmentExpenseChart data={byAgency} />
+              <div className="toolbar" style={{ marginBottom: 4 }}>
+                <h3 style={{ margin: 0 }}>Top 5 Expense by Agency</h3>
+                <button type="button" className="btn" onClick={() => setMoreOpen('agency')}>
+                  More
+                </button>
+              </div>
+              <DonutChart data={agencyDonutRows} centerLabel="Total Expense" legendBelow formatValue={formatCompactCurrency} />
             </div>
             <div className="card">
-              <h3>Expense by Advertiser &amp; PIC</h3>
-              <DonutChart data={advertiserDonutRows} centerLabel="Total Expense" formatValue={formatCompactCurrency} />
+              <div className="toolbar" style={{ marginBottom: 4 }}>
+                <h3 style={{ margin: 0 }}>Top 5 Expense by Advertiser</h3>
+                <button type="button" className="btn" onClick={() => setMoreOpen('advertiser')}>
+                  More
+                </button>
+              </div>
+              <DonutChart data={advertiserDonutRows} centerLabel="Total Expense" legendBelow formatValue={formatCompactCurrency} />
             </div>
             <div className="card">
               <h3>Expense by Activity Type</h3>
-              <SimpleBarChart data={activityTypeBarRows} formatValue={formatCompactCurrency} />
+              <ActivityTypeExpenseChart data={byActivityType} periodLabel={periodLabel} />
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr 1fr', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <div className="card">
               <h3>Expense by POD</h3>
               <DepartmentExpenseChart data={byPod} />
             </div>
             <div className="card">
-              <h3>Transaction Trend</h3>
-              <TransactionTrendChart data={trend} />
-            </div>
-            <div className="card">
               <h3>Transaction Status</h3>
-              <DonutChart data={statusDonutRows} centerLabel="Total Transactions" formatValue={(v) => String(v)} />
+              <StatusSummaryChart data={statusRows} selectedKey={appliedFilter.status || undefined} />
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
-            <div className="card">
-              <div className="toolbar" style={{ marginBottom: 4 }}>
-                <h3 style={{ margin: 0 }}>Recent Transactions</h3>
-                <Link href="/expenses">View All</Link>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Expense No.</th>
-                    <th>Date</th>
-                    <th>Sales/POD</th>
-                    <th>Agency &amp; PIC</th>
-                    <th>Advertiser &amp; PIC</th>
-                    <th>Category</th>
-                    <th>Amount</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentTransactions.map((r) => (
-                    <tr key={r.id}>
-                      <td>
-                        <Link href={`/expenses/${r.id}`}>{r.expenseNo}</Link>
-                      </td>
-                      <td>{formatDate(r.expenseDate)}</td>
-                      <td>
-                        {r.salesName}
-                        {r.departmentName !== '-' && <span style={{ color: 'var(--muted)' }}> / {r.departmentName}</span>}
-                      </td>
-                      <td>
-                        {r.agencyName}
-                        {r.agencyName !== '-' && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{r.salesName}</div>}
-                      </td>
-                      <td>
-                        {r.advertiserName}
-                        {r.advertiserName !== '-' && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{r.salesName}</div>}
-                      </td>
-                      <td>{r.categoryNames}</td>
-                      <td>{formatCurrency(Number(r.amount))}</td>
-                      <td>
-                        <StatusBadge status={r.status} />
-                      </td>
-                    </tr>
-                  ))}
-                  {recentTransactions.length === 0 && (
-                    <tr>
-                      <td colSpan={8} style={{ color: 'var(--muted)' }}>No data</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+          <div className="card">
+            <h3>Transaction Trend per Month</h3>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6, marginBottom: 10 }}>{periodLabel}</div>
+            <MonthlyTrendChart data={trend} from={appliedFilter.from} to={appliedFilter.to} />
           </div>
+
         </>
       ) : null}
+
+      {moreOpen === 'agency' && (
+        <GroupDetailModal
+          title="Expense by Agency"
+          rows={byAgency}
+          chart="donut"
+          showPic={false}
+          legendHoverOnly
+          showAll
+          renderExpanded={(row) => <GroupTransactionList group="agency" id={row.id} query={buildQuery(appliedFilter)} />}
+          onClose={() => setMoreOpen(null)}
+        />
+      )}
+      {moreOpen === 'advertiser' && (
+        <GroupDetailModal
+          title="Expense by Advertiser"
+          rows={byAdvertiser}
+          chart="donut"
+          showPic={false}
+          legendHoverOnly
+          showAll
+          renderExpanded={(row) => <GroupTransactionList group="advertiser" id={row.id} query={buildQuery(appliedFilter)} />}
+          onClose={() => setMoreOpen(null)}
+        />
+      )}
     </div>
   );
 }

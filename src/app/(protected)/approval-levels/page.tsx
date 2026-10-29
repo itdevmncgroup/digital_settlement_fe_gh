@@ -31,11 +31,36 @@ interface ApprovalLevel {
   departments: { departmentId: string; department: Option }[];
   requestorPositions: { positionId: string; position: Option }[];
   activityTypes: { activityTypeId: string; activityType: Option }[];
+  paymentMethods: { paymentMethodId: string; paymentMethod: Option }[];
   minAmount: string;
   maxAmount: string | null;
   isActive: boolean;
   steps: LevelStep[];
 }
+
+const STAGE_LABEL: Record<ApprovalLevel['documentStage'], string> = {
+  PRE_EVENT: 'Pre-Event',
+  EXPENSES: 'Expenses',
+  SETTLEMENT: 'Settlement',
+  EXPENSE_REQUEST: 'Expense Request',
+};
+
+const EMPTY_PANEL = {
+  stage: '',
+  status: '',
+  scope: '',
+  activityTypeId: '',
+  paymentMethodId: '',
+  departmentId: '',
+  requestorPositionId: '',
+  chainPositionId: '',
+  amount: '',
+};
+
+// Panel select value meaning "Levels with no restriction on this dimension" (an empty list = any).
+const ANY = '__ANY__';
+// '' = no filter, ANY = a Level that lists nothing, otherwise a Level that lists that id.
+const matchesList = (selected: string, ids: string[]) => !selected || (selected === ANY ? ids.length === 0 : ids.includes(selected));
 
 function formatCurrency(value: string | number | null) {
   if (value === null) return 'No limit';
@@ -52,6 +77,7 @@ export default function ApprovalLevelsPage() {
   const [positions, setPositions] = useState<Option[]>([]);
   const [departments, setDepartments] = useState<Option[]>([]);
   const [activityTypes, setActivityTypes] = useState<Option[]>([]);
+  const [paymentMethods, setPaymentMethods] = useState<Option[]>([]);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -64,6 +90,7 @@ export default function ApprovalLevelsPage() {
     departmentIds: [] as string[],
     requestorPositionIds: [] as string[],
     activityTypeIds: [] as string[],
+    paymentMethodIds: [] as string[],
     minAmount: '0',
     maxAmount: '',
     isActive: true,
@@ -72,11 +99,43 @@ export default function ApprovalLevelsPage() {
   const [pickerPositionId, setPickerPositionId] = useState('');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [panel, setPanel] = useState(EMPTY_PANEL);
+  const setField = (key: keyof typeof EMPTY_PANEL) => (value: string) => setPanel((prev) => ({ ...prev, [key]: value }));
+  const resetFilters = () => {
+    setPanel(EMPTY_PANEL);
+    setSearch('');
+    setSearchInput('');
+  };
+  const filtersActive = !!search || Object.values(panel).some((v) => v !== '');
 
   const filteredLevels = levels.filter((l) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return [l.name, ...l.activityTypes.map((a) => a.activityType.name), ...l.departments.map((d) => d.department.name)].some((v) => v?.toLowerCase().includes(q));
+    if (search) {
+      const q = search.toLowerCase();
+      const haystack = [
+        l.name,
+        STAGE_LABEL[l.documentStage],
+        ...l.activityTypes.map((a) => a.activityType.name),
+        ...l.paymentMethods.map((m) => m.paymentMethod.name),
+        ...l.departments.map((d) => d.department.name),
+        ...l.requestorPositions.map((p) => p.position.name),
+        ...l.steps.map((s) => s.position.name),
+      ];
+      if (!haystack.some((v) => v?.toLowerCase().includes(q))) return false;
+    }
+    if (panel.stage && l.documentStage !== panel.stage) return false;
+    if (panel.status && l.isActive !== (panel.status === 'active')) return false;
+    if (panel.scope && l.scopeType !== panel.scope) return false;
+    if (!matchesList(panel.activityTypeId, l.activityTypes.map((a) => a.activityTypeId))) return false;
+    if (!matchesList(panel.paymentMethodId, l.paymentMethods.map((m) => m.paymentMethodId))) return false;
+    if (!matchesList(panel.departmentId, l.departments.map((d) => d.departmentId))) return false;
+    if (!matchesList(panel.requestorPositionId, l.requestorPositions.map((p) => p.positionId))) return false;
+    if (panel.chainPositionId && !l.steps.some((s) => s.position.id === panel.chainPositionId)) return false;
+    // "Amount" finds the Levels whose range covers that amount.
+    if (panel.amount !== '') {
+      const amount = Number(panel.amount);
+      if (amount < Number(l.minAmount) || (l.maxAmount !== null && amount > Number(l.maxAmount))) return false;
+    }
+    return true;
   });
   const pagination = usePagination(filteredLevels);
 
@@ -84,6 +143,7 @@ export default function ApprovalLevelsPage() {
     api.get<ApprovalLevel[]>('/approval-levels').then(setLevels).catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
     api.get<Option[]>('/positions?active=true').then(setPositions).catch(() => undefined);
     api.get<Option[]>('/activity-types?active=true').then(setActivityTypes).catch(() => undefined);
+    api.get<Option[]>('/payment-methods?active=true').then(setPaymentMethods).catch(() => undefined);
     api.get<Option[]>('/departments?active=true').then((res) => setDepartments(sortDepartments(res))).catch(() => undefined);
   };
 
@@ -99,6 +159,7 @@ export default function ApprovalLevelsPage() {
       departmentIds: [],
       requestorPositionIds: [],
       activityTypeIds: [],
+      paymentMethodIds: [],
       minAmount: '0',
       maxAmount: '',
       isActive: true,
@@ -116,6 +177,7 @@ export default function ApprovalLevelsPage() {
       departmentIds: l.departments.map((d) => d.departmentId),
       requestorPositionIds: l.requestorPositions.map((p) => p.positionId),
       activityTypeIds: l.activityTypes.map((a) => a.activityTypeId),
+      paymentMethodIds: l.paymentMethods.map((m) => m.paymentMethodId),
       minAmount: l.minAmount,
       maxAmount: l.maxAmount ?? '',
       isActive: l.isActive,
@@ -135,6 +197,13 @@ export default function ApprovalLevelsPage() {
     setForm((f) => ({
       ...f,
       activityTypeIds: f.activityTypeIds.includes(id) ? f.activityTypeIds.filter((a) => a !== id) : [...f.activityTypeIds, id],
+    }));
+  };
+
+  const togglePaymentMethod = (id: string) => {
+    setForm((f) => ({
+      ...f,
+      paymentMethodIds: f.paymentMethodIds.includes(id) ? f.paymentMethodIds.filter((m) => m !== id) : [...f.paymentMethodIds, id],
     }));
   };
 
@@ -170,6 +239,7 @@ export default function ApprovalLevelsPage() {
           departmentIds: form.scopeType === 'DEPARTMENT' ? form.departmentIds : undefined,
           requestorPositionIds: form.requestorPositionIds,
           activityTypeIds: form.activityTypeIds, // [] clears the filter
+          paymentMethodIds: form.paymentMethodIds, // [] clears the restriction
           minAmount: Number(form.minAmount),
           maxAmount: form.maxAmount ? Number(form.maxAmount) : undefined,
           isActive: form.isActive,
@@ -183,6 +253,7 @@ export default function ApprovalLevelsPage() {
           departmentIds: form.scopeType === 'DEPARTMENT' ? form.departmentIds : undefined,
           requestorPositionIds: form.requestorPositionIds,
           activityTypeIds: form.activityTypeIds,
+          paymentMethodIds: form.paymentMethodIds,
           minAmount: Number(form.minAmount),
           maxAmount: form.maxAmount ? Number(form.maxAmount) : undefined,
           steps,
@@ -211,7 +282,7 @@ export default function ApprovalLevelsPage() {
         <h1>Approval Level</h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <SearchBox
-            placeholder="Search name, department..."
+            placeholder="Search name, stage, department, position..."
             value={searchInput}
             onChange={setSearchInput}
             onSearch={() => setSearch(searchInput)}
@@ -273,6 +344,30 @@ export default function ApprovalLevelsPage() {
                   Expenses of these Activity Types in the Level&apos;s Department(s) skip the Expense approval chain
                   (already approved via the Expense Request); the Settlement chain is unchanged.
                 </small>
+              )}
+            </div>
+            <div className="form-row">
+              <label>Payment Method (optional — blank = any payment method)</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+                {paymentMethods.map((m) => (
+                  <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'normal' }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={form.paymentMethodIds.includes(m.id)}
+                      onChange={() => togglePaymentMethod(m.id)}
+                    />
+                    {m.name}
+                  </label>
+                ))}
+              </div>
+              {form.documentStage === 'EXPENSES' && form.paymentMethodIds.length > 0 && (
+                <small style={{ color: 'var(--muted)' }}>
+                  Expenses governed by this Level can only use the checked Payment Method(s).
+                </small>
+              )}
+              {form.documentStage !== 'EXPENSES' && form.paymentMethodIds.length > 0 && (
+                <small style={{ color: 'var(--muted)' }}>Only applied to Expenses stage Levels.</small>
               )}
             </div>
             <div className="form-row">
@@ -374,6 +469,81 @@ export default function ApprovalLevelsPage() {
 
       {error && <div className="error-text">{error}</div>}
 
+      <div className="toolbar">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={panel.stage} onChange={(e) => setField('stage')(e.target.value)} style={{ width: 170 }}>
+            <option value="">All Stages</option>
+            <option value="EXPENSES">Expenses</option>
+            <option value="SETTLEMENT">Settlement</option>
+            <option value="EXPENSE_REQUEST">Expense Request</option>
+            <option value="PRE_EVENT">Pre-Event (legacy)</option>
+          </select>
+          <select value={panel.activityTypeId} onChange={(e) => setField('activityTypeId')(e.target.value)} style={{ width: 190 }}>
+            <option value="">All Activity Types</option>
+            <option value={ANY}>Any (unrestricted)</option>
+            {activityTypes.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+          <select value={panel.paymentMethodId} onChange={(e) => setField('paymentMethodId')(e.target.value)} style={{ width: 190 }}>
+            <option value="">All Payment Methods</option>
+            <option value={ANY}>Any (unrestricted)</option>
+            {paymentMethods.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+          <select value={panel.scope} onChange={(e) => setField('scope')(e.target.value)} style={{ width: 150 }}>
+            <option value="">All Scopes</option>
+            <option value="ANY">Any (fallback)</option>
+            <option value="DEPARTMENT">Department</option>
+          </select>
+          <select value={panel.departmentId} onChange={(e) => setField('departmentId')(e.target.value)} style={{ width: 180 }}>
+            <option value="">All Departments</option>
+            <option value={ANY}>Any (no Department)</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+          <select value={panel.requestorPositionId} onChange={(e) => setField('requestorPositionId')(e.target.value)} style={{ width: 190 }}>
+            <option value="">All Requestors</option>
+            <option value={ANY}>Any (unrestricted)</option>
+            {positions.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <select value={panel.chainPositionId} onChange={(e) => setField('chainPositionId')(e.target.value)} style={{ width: 190 }}>
+            <option value="">Any Position in Chain</option>
+            {positions.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <select value={panel.status} onChange={(e) => setField('status')(e.target.value)} style={{ width: 130 }}>
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+          <NumberInput placeholder="Amount covered..." value={panel.amount} onChange={setField('amount')} style={{ width: 150 }} />
+          <button type="button" className="btn" disabled={!filtersActive} onClick={resetFilters}>
+            Reset
+          </button>
+          {filtersActive && (
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+              {filteredLevels.length} of {levels.length} Levels
+            </span>
+          )}
+        </div>
+      </div>
+
       <div className="card">
         <table>
           <thead>
@@ -381,6 +551,7 @@ export default function ApprovalLevelsPage() {
               <th>Name</th>
               <th>Stage</th>
               <th>Activity Type</th>
+              <th>Payment Method</th>
               <th>Scope</th>
               <th>Requestor</th>
               <th>Amount Range</th>
@@ -395,6 +566,7 @@ export default function ApprovalLevelsPage() {
                 <td>{l.name}</td>
                 <td>{l.documentStage === 'PRE_EVENT' ? 'Pre-Event' : l.documentStage === 'EXPENSES' ? 'Expenses' : l.documentStage === 'EXPENSE_REQUEST' ? 'Expense Request' : 'Settlement'}</td>
                 <td>{l.activityTypes.length > 0 ? l.activityTypes.map((a) => a.activityType.name).join(', ') : 'Any'}</td>
+                <td>{l.paymentMethods.length > 0 ? l.paymentMethods.map((m) => m.paymentMethod.name).join(', ') : 'Any'}</td>
                 <td>{scopeLabel(l)}</td>
                 <td>{requestorLabel(l)}</td>
                 <td>
@@ -411,7 +583,9 @@ export default function ApprovalLevelsPage() {
             ))}
             {filteredLevels.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ color: 'var(--muted)' }}>No Approval Levels configured — submits will be blocked until one exists</td>
+                <td colSpan={10} style={{ color: 'var(--muted)' }}>
+                  {levels.length > 0 ? 'No Approval Levels match the search' : 'No Approval Levels configured — submits will be blocked until one exists'}
+                </td>
               </tr>
             )}
           </tbody>

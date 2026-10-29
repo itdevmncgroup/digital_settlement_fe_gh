@@ -13,6 +13,7 @@ export default function UnitsPage() {
         { key: 'fullName', label: 'Full Name', type: 'text' },
         { key: 'logo', label: 'Logo', type: 'image' },
         { key: 'revenueSharePercent', label: 'Default Settlement %', type: 'text' },
+        { key: 'isActive', label: 'Active', type: 'checkbox' },
       ]}
       columns={[
         { key: 'logo', label: 'Logo', type: 'image' },

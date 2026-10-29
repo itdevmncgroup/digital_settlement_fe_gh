@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import { NavIcon } from '@/components/NavIcons';
+import BrandLogo from '@/components/BrandLogo';
 
 // Shell for the public forgot/reset-password pages. These are opened from an
 // email on a phone, so they are laid out for a mobile browser first (single
@@ -10,7 +10,7 @@ export default function AuthMobileLayout({ title, subtitle, children }: { title:
     <div className="login-page auth-mobile-page">
       <div className="login-card auth-mobile-card">
         <div className="auth-mobile-logo">
-          <NavIcon name="logo" />
+          <BrandLogo height={52} />
         </div>
         <h2 className="gradient-text">{title}</h2>
         {subtitle && <p className="auth-mobile-subtitle">{subtitle}</p>}

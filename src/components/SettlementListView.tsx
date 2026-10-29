@@ -2,14 +2,17 @@
 
 import { Fragment, Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError, downloadFile, postForm } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDate, formatDateTime } from '@/lib/date';
+import DatePicker from '@/components/DatePicker';
 import Modal from '@/components/Modal';
+import { useToast } from '@/components/ToastProvider';
+import NumberInput from '@/components/NumberInput';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
-import SearchBox from '@/components/SearchBox';
+import TransactionTotalsCards, { sumByBucket, TotalsBucket } from '@/components/TransactionTotalsCards';
 import { usePrompt } from '@/components/PromptDialog';
 import SplashLoader from '@/components/SplashLoader';
 
@@ -43,6 +46,8 @@ interface SettlementExpenseRow {
   status: string;
   sales: { name: string };
   isMatched: boolean;
+  advertiser?: { name: string; agencies?: { agency: { name: string } }[] } | null;
+  extraAgencies?: { agency: { name: string } }[];
   approvalRequest: ApprovalRequestInfo | null;
 }
 
@@ -51,9 +56,9 @@ interface SettlementRow {
   settlementNo: string;
   totalAmount: string;
   // DRAFT (unused in practice) | DRAFT_SETTLEMENT | APPROVAL_SLS_MAR_DIR |
-  // APPROVAL_VP_ACC_BIL_TAX_3TV | APPROVAL_CO_CFO_3TV | APPROVAL_HEAD_CORSEC | APPROVAL_SVP | REVISION | COMPLETE | REJECTED.
+  // APPROVAL_SVP_ACC_BIL_TAX_3TV | APPROVAL_CO_CFO_3TV | APPROVAL_HEAD_CORSEC | APPROVAL_SVP | REVISION | READY_SENT_TO_ODOO | COMPLETE | REJECTED.
   status: string;
-  // Only meaningful once status is COMPLETE - NOT_STARTED | PENDING | SENT | FAILED.
+  // Only meaningful once status is READY_SENT_TO_ODOO or COMPLETE - NOT_STARTED | PENDING | SENT | FAILED.
   odooSyncStatus: string;
   odooSyncError: string | null;
   // Unit picked in "Create Draft PR" (its code is the PR's org_id) - preselected when retrying a FAILED send.
@@ -105,29 +110,73 @@ interface DraftPrPreview {
   }[];
 }
 
+// Status combobox: five buckets that together cover every status. Draft = still with Sales (not submitted yet, or sent
+// back for revision); Pending Approval = the approval tiers; Ready Sent to Odoo = approved, not sent yet; Complete = sent.
+const STATUS_OPTIONS: { value: string; label: string; statuses: string[] }[] = [
+  { value: 'DRAFT', label: 'Draft', statuses: ['DRAFT', 'DRAFT_SETTLEMENT', 'REVISION'] },
+  {
+    value: 'PENDING_APPROVAL',
+    label: 'Pending Approval',
+    statuses: ['APPROVAL_SLS_MAR_DIR', 'APPROVAL_SVP_ACC_BIL_TAX_3TV', 'APPROVAL_CO_CFO_3TV', 'APPROVAL_HEAD_CORSEC', 'APPROVAL_SVP'],
+  },
+  { value: 'COMPLETE', label: 'Complete', statuses: ['COMPLETE'] },
+  { value: 'READY_SENT_TO_ODOO', label: 'Ready Sent to Odoo', statuses: ['READY_SENT_TO_ODOO'] },
+  { value: 'REJECTED', label: 'Rejected', statuses: ['REJECTED'] },
+];
+const SYNC_OPTIONS = [
+  { value: 'NOT_STARTED', label: 'Not sent' },
+  { value: 'PENDING', label: 'Sending' },
+  { value: 'SENT', label: 'Sent' },
+  { value: 'FAILED', label: 'Failed' },
+];
+
+// yyyy-mm-dd of a timestamp in the user's own timezone (what the date pickers hold).
+function localYmd(value: string) {
+  const d = new Date(value);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Agencies of a Settlement's Expenses: the ones picked on each, or else its Advertiser's.
+function settlementAgencyNames(r: SettlementRow): string[] {
+  return r.expenses.flatMap((e) =>
+    (e.extraAgencies?.length ? e.extraAgencies : (e.advertiser?.agencies ?? [])).map((x) => x.agency.name),
+  );
+}
+
+// Totals cards: Completed = approved (ready to send or already sent to Odoo), Rejected = REJECTED, Pending = everything else.
+const settlementBucket = (status: string): TotalsBucket =>
+  status === 'COMPLETE' || status === 'READY_SENT_TO_ODOO' ? 'complete' : status === 'REJECTED' ? 'rejected' : 'pending';
+
+// Friendlier labels for the two Odoo-hand-off statuses; every other status shows its raw value.
+const STATUS_LABELS: Record<string, string> = { READY_SENT_TO_ODOO: 'Ready Sent to Odoo', COMPLETE: 'Complete' };
+
 function formatCurrency(value: string | number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(value));
 }
 
-export default function SettlementPage() {
+// scope: Settlement > Entertainment = Entertainment Settlements, Settlement > Flower Bouquet = Flower Bouquet ones.
+export default function SettlementListView({ scope = 'entertainment' }: { scope?: 'entertainment' | 'flower' }) {
   return (
     <Suspense fallback={<SplashLoader message="Loading" />}>
-      <SettlementPageInner />
+      <SettlementPageInner scope={scope} />
     </Suspense>
   );
 }
 
-function SettlementPageInner() {
+function SettlementPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
+  const router = useRouter();
+  const group = scope === 'flower' ? 'flower' : 'entertainment';
   const searchParams = useSearchParams();
   const { user, hasRole, hasPermission } = useAuth();
+  const toast = useToast();
+  const [resendingId, setResendingId] = useState<string | null>(null);
   const canManage = hasRole('ADMINISTRATOR');
   const canGenerate = hasRole('SALES') || canManage || hasPermission('settlement.create.owndept');
-  const canViewBankMatching = canManage || hasPermission('expense.automatch');
   const prompt = usePrompt();
 
   const [rows, setRows] = useState<SettlementRow[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
-  // "Create Draft PR" (pick a Unit, send a COMPLETE settlement to Odoo): Admin, or
+  // "Create Draft PR" (pick a Unit, send a READY_SENT_TO_ODOO settlement to Odoo): Admin, or
   // settlement.send.odoo.all for any settlement, or settlement.send.odoo.owndept
   // for settlements of the user's own Department(s) (/departments/me for non-Admin).
   const canDraftPr = (departmentId: string) =>
@@ -138,15 +187,57 @@ function SettlementPageInner() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [expandedId, setExpandedId] = useState('');
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
+
+  // Search panel - all client-side over the loaded list (the Department filter above narrows it server-side).
+  const [statusFilter, setStatusFilter] = useState('');
+  const [syncFilter, setSyncFilter] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [agencyFilter, setAgencyFilter] = useState('');
+  const [advertiserFilter, setAdvertiserFilter] = useState('');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
+  const resetFilters = () => {
+    setDepartmentFilter('');
+    setStatusFilter('');
+    setSyncFilter('');
+    setFromDate('');
+    setToDate('');
+    setAgencyFilter('');
+    setAdvertiserFilter('');
+    setMinAmount('');
+    setMaxAmount('');
+    setBucketFilter(null);
+  };
+  const agencyNameOptions = Array.from(new Set(rows.flatMap(settlementAgencyNames))).sort();
+  const advertiserNameOptions = Array.from(
+    new Set(rows.flatMap((r) => r.expenses.map((e) => e.advertiser?.name).filter((n): n is string => !!n))),
+  ).sort();
 
   const filteredRows = rows.filter((r) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return [r.settlementNo, r.department?.name, r.createdBy?.name].some((v) => v?.toLowerCase().includes(q));
+    if (statusFilter && !STATUS_OPTIONS.find((o) => o.value === statusFilter)?.statuses.includes(r.status)) return false;
+    if (syncFilter && r.odooSyncStatus !== syncFilter) return false;
+    if (fromDate || toDate) {
+      const day = localYmd(r.createdAt);
+      if ((fromDate && day < fromDate) || (toDate && day > toDate)) return false;
+    }
+    if (agencyFilter) {
+      const q = agencyFilter.toLowerCase();
+      if (!settlementAgencyNames(r).some((n) => n.toLowerCase().includes(q))) return false;
+    }
+    if (advertiserFilter) {
+      const q = advertiserFilter.toLowerCase();
+      if (!r.expenses.some((e) => e.advertiser?.name.toLowerCase().includes(q))) return false;
+    }
+    const amount = Number(r.totalAmount);
+    if (minAmount !== '' && amount < Number(minAmount)) return false;
+    if (maxAmount !== '' && amount > Number(maxAmount)) return false;
+    return true;
   });
-  const pagination = usePagination(filteredRows);
+  // Clicking a totals card narrows the table to that bucket (the cards keep showing every bucket's total).
+  const [bucketFilter, setBucketFilter] = useState<TotalsBucket | null>(null);
+  const visibleRows = bucketFilter ? filteredRows.filter((r) => settlementBucket(r.status) === bucketFilter) : filteredRows;
+  const pagination = usePagination(visibleRows);
 
   const [submittingDraftId, setSubmittingDraftId] = useState('');
 
@@ -169,18 +260,34 @@ function SettlementPageInner() {
   const [draftPrStatement, setDraftPrStatement] = useState<File | null>(null);
 
   const load = () => {
-    const qs = departmentFilter ? `?departmentId=${departmentFilter}` : '';
+    const qs = `?group=${scope === 'flower' ? 'FLOWER' : 'ENTERTAINMENT'}${departmentFilter ? `&departmentId=${departmentFilter}` : ''}`;
     api
       .get<SettlementRow[]>(`/settlements${qs}`)
       .then(setRows)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
   };
 
-  useEffect(load, [departmentFilter]);
+  useEffect(load, [departmentFilter, scope]);
 
   // Lands here from the settlement approval email/push deep link
   // (`${APP_PUBLIC_URL}/settlement?open=<id>`, see approvals.service.ts
   // notifyStep) - auto-expand and scroll to that row once it's loaded.
+  // The deep link always points at /settlement; a Flower Bouquet Settlement lives under Flower Bouquet (and the
+  // other way round), so send it to the list that holds it.
+  useEffect(() => {
+    const open = searchParams.get('open');
+    if (!open) return;
+    api
+      .get<{ expenses?: { activityType?: { name: string } | null }[] }>(`/settlements/${open}`)
+      .then((st) => {
+        const isFlower = (st.expenses ?? []).some((e) => e.activityType?.name === 'Flower Bouquet');
+        if (isFlower && scope !== 'flower') router.replace(`/settlement/flower-bouquet?open=${open}`);
+        else if (!isFlower && scope === 'flower') router.replace(`/settlement?open=${open}`);
+      })
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const open = searchParams.get('open');
     if (!open || rows.length === 0) return;
@@ -194,6 +301,20 @@ function SettlementPageInner() {
     api.get<DepartmentOption[]>(path).then(setDepartmentOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canManage]);
+
+  // Re-sends the current approval tier's email to its approver (no state change).
+  const resendApprovalEmail = async (id: string) => {
+    setResendingId(id);
+    setError('');
+    try {
+      await api.post(`/settlements/${id}/resend-approval-email`);
+      toast.success('Reminder email has been sent to the current approver.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to resend approval email');
+    } finally {
+      setResendingId(null);
+    }
+  };
 
   const markComplete = async (id: string) => {
     setBusy(true);
@@ -336,10 +457,19 @@ function SettlementPageInner() {
     setDraftPrError(
       r.odooSyncStatus === 'FAILED' ? `Last send to Odoo failed${r.odooSyncError ? `: ${r.odooSyncError}` : ''}. You can try again.` : '',
     );
-    if (unitOptions.length === 0) {
-      api.get<UnitOption[]>('/units?active=true').then(setUnitOptions).catch(() => setDraftPrError('Failed to load units'));
-    }
-    if (retryUnitId) loadDraftPrPreview(r.id, retryUnitId);
+    // Units depend on the Settlement's Activity Type (Entertainment -> RCTI, Flower Bouquet -> GTV),
+    // so they are fetched per Settlement. A single allowed Unit is picked for the user.
+    setUnitOptions([]);
+    api
+      .get<UnitOption[]>(`/settlements/${r.id}/draft-pr/units`)
+      .then((units) => {
+        setUnitOptions(units);
+        const retryAllowed = !!retryUnitId && units.some((u) => u.id === retryUnitId);
+        if (retryAllowed) loadDraftPrPreview(r.id, retryUnitId);
+        else if (units.length === 1) setDraftPrUnitId(units[0].id);
+        else setDraftPrUnitId('');
+      })
+      .catch(() => setDraftPrError('Failed to load units'));
   };
 
   const previewDraftPr = async () => {
@@ -390,15 +520,24 @@ function SettlementPageInner() {
   return (
     <div>
       <div className="toolbar">
-        <h1>Settlement</h1>
+        <h1>{scope === 'flower' ? 'Settlement - Flower Bouquet' : 'Settlement - Entertainment'}</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <SearchBox
-            placeholder="Search settlement no, department..."
-            value={searchInput}
-            onChange={setSearchInput}
-            onSearch={() => setSearch(searchInput)}
-          />
-          <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ width: 220 }}>
+          {canGenerate && (
+            <Link href={`/settlement/create?group=${group}`} className="btn btn-primary">
+              Create Settlement
+            </Link>
+          )}
+        </div>
+      </div>
+      <TransactionTotalsCards
+        totals={sumByBucket(filteredRows, (r) => settlementBucket(r.status), (r) => r.totalAmount)}
+        selected={bucketFilter}
+        onSelect={setBucketFilter}
+      />
+
+      <div className="toolbar" style={{ marginTop: -4 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ width: 200 }}>
             <option value="">{canManage ? 'All Departments' : 'All my Departments'}</option>
             {departmentOptions.map((d) => (
               <option key={d.id} value={d.id}>
@@ -406,16 +545,59 @@ function SettlementPageInner() {
               </option>
             ))}
           </select>
-          {canViewBankMatching && (
-            <Link href="/bank-matching" className="btn">
-              Bank Matching Detail
-            </Link>
-          )}
-          {canGenerate && (
-            <Link href="/settlement/create" className="btn btn-primary">
-              Create Settlement
-            </Link>
-          )}
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: 220 }}>
+            <option value="">All Status</option>
+            {STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <select value={syncFilter} onChange={(e) => setSyncFilter(e.target.value)} style={{ width: 150 }}>
+            <option value="">All Odoo status</option>
+            {SYNC_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
+            From
+            <DatePicker value={fromDate} onChange={setFromDate} style={{ width: 150 }} />
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
+            To
+            <DatePicker value={toDate} onChange={setToDate} style={{ width: 150 }} />
+          </label>
+          <input
+            list="settlement-filter-agencies"
+            placeholder="Search agency..."
+            value={agencyFilter}
+            onChange={(e) => setAgencyFilter(e.target.value)}
+            style={{ width: 170 }}
+          />
+          <datalist id="settlement-filter-agencies">
+            {agencyNameOptions.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+          <input
+            list="settlement-filter-advertisers"
+            placeholder="Search advertiser..."
+            value={advertiserFilter}
+            onChange={(e) => setAdvertiserFilter(e.target.value)}
+            style={{ width: 170 }}
+          />
+          <datalist id="settlement-filter-advertisers">
+            {advertiserNameOptions.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+          <NumberInput placeholder="Min amount" value={minAmount} onChange={setMinAmount} style={{ width: 140 }} />
+          <NumberInput placeholder="Max amount" value={maxAmount} onChange={setMaxAmount} style={{ width: 140 }} />
+          <button type="button" className="btn" onClick={resetFilters}>
+            Reset
+          </button>
         </div>
       </div>
       <p style={{ color: 'var(--muted)', marginTop: -8, fontSize: 12 }}>
@@ -456,10 +638,10 @@ function SettlementPageInner() {
                   <td>{r.department?.name}</td>
                   <td>{formatCurrency(r.totalAmount)}</td>
                   <td>
-                    <span className={`badge ${r.status === 'COMPLETE' ? 'badge-success' : 'badge-info'}`}>{r.status}</span>
+                    <span className={`badge ${r.status === 'COMPLETE' ? 'badge-success' : r.status === 'READY_SENT_TO_ODOO' ? 'badge-warning' : 'badge-info'}`}>{STATUS_LABELS[r.status] ?? r.status}</span>
                   </td>
                   <td>
-                    {r.status === 'COMPLETE' ? (
+                    {r.status === 'COMPLETE' || r.status === 'READY_SENT_TO_ODOO' ? (
                       <span
                         className={`badge ${
                           r.odooSyncStatus === 'SENT' ? 'badge-success' : r.odooSyncStatus === 'FAILED' ? 'badge-danger' : 'badge-warning'
@@ -472,34 +654,46 @@ function SettlementPageInner() {
                       <span className="badge badge-info">-</span>
                     )}
                   </td>
-                  <td style={{ display: 'flex', gap: 8 }}>
+                  <td>
+                    <div className="row-actions">
                     {canGenerate && (r.status === 'DRAFT_SETTLEMENT' || r.status === 'REVISION') && (
-                      <Link href={`/settlement/${r.id}/edit`} className="btn">
+                      <Link href={`/settlement/${r.id}/edit?group=${group}`} className="btn btn-xs">
                         {r.status === 'REVISION' ? 'Resubmit' : 'Edit'}
                       </Link>
                     )}
                     {canGenerate && r.status === 'DRAFT_SETTLEMENT' && (
-                      <button className="btn" disabled={busy} onClick={() => openAddExpensesModal(r)}>
+                      <button className="btn btn-xs" disabled={busy} onClick={() => openAddExpensesModal(r)}>
                         Add Expenses
                       </button>
                     )}
                     {canGenerate && r.status === 'DRAFT_SETTLEMENT' && (
                       <button
-                        className="btn btn-primary"
+                        className="btn btn-primary btn-xs"
                         disabled={busy || submittingDraftId === r.id}
                         onClick={() => submitDraft(r.id)}
                       >
                         {submittingDraftId === r.id ? 'Submitting...' : 'Submit'}
                       </button>
                     )}
+                    {canGenerate && r.status.startsWith('APPROVAL_') && (
+                      <button
+                        type="button"
+                        className="btn btn-xs"
+                        disabled={resendingId === r.id}
+                        onClick={() => resendApprovalEmail(r.id)}
+                        title="Resend the approval email to the current approver"
+                      >
+                        {resendingId === r.id ? 'Sending...' : 'Resend'}
+                      </button>
+                    )}
                     {canManage && r.status === 'DRAFT' && (
-                      <button className="btn btn-primary" disabled={busy} onClick={() => markComplete(r.id)}>
+                      <button className="btn btn-primary btn-xs" disabled={busy} onClick={() => markComplete(r.id)}>
                         Mark Complete
                       </button>
                     )}
-                    {canDraftPr(r.department.id) && r.status === 'COMPLETE' && (
+                    {canDraftPr(r.department.id) && (r.status === 'READY_SENT_TO_ODOO' || r.status === 'COMPLETE') && (
                       <button
-                        className="btn"
+                        className="btn btn-xs btn-icon-xs"
                         title={r.odooSyncStatus === 'SENT' ? 'Already sent to Odoo' : 'Create Draft PR'}
                         aria-label="Create Draft PR"
                         disabled={busy || r.odooSyncStatus === 'SENT'}
@@ -512,9 +706,9 @@ function SettlementPageInner() {
                         </svg>
                       </button>
                     )}
-                    {canDraftPr(r.department.id) && r.status === 'COMPLETE' && r.odooSyncStatus === 'FAILED' && (
+                    {canDraftPr(r.department.id) && r.status === 'READY_SENT_TO_ODOO' && r.odooSyncStatus === 'FAILED' && (
                       <button
-                        className="btn btn-primary"
+                        className="btn btn-primary btn-xs"
                         title={r.odooSyncError ? `Send to Odoo failed: ${r.odooSyncError}` : 'Send to Odoo failed'}
                         disabled={busy}
                         onClick={() => openDraftPr(r)}
@@ -522,6 +716,7 @@ function SettlementPageInner() {
                         Retry Send to Odoo
                       </button>
                     )}
+                    </div>
                   </td>
                 </tr>
                 {expandedId === r.id && (
@@ -606,7 +801,7 @@ function SettlementPageInner() {
                 )}
               </Fragment>
             ))}
-            {filteredRows.length === 0 && (
+            {visibleRows.length === 0 && (
               <tr>
                 <td colSpan={7} style={{ color: 'var(--muted)' }}>
                   No settlements
@@ -615,7 +810,7 @@ function SettlementPageInner() {
             )}
           </tbody>
         </table>
-        {filteredRows.length > 0 && (
+        {visibleRows.length > 0 && (
           <Pagination
             page={pagination.page}
             totalPages={pagination.totalPages}

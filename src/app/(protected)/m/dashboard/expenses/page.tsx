@@ -92,7 +92,7 @@ function DashboardExpenseList() {
       {(rows ?? []).map((r) => (
         <Link
           key={r.id}
-          href={r.salesId === user?.id ? `/m/expense/${r.id}/edit` : `/expenses/${r.id}`}
+          href={r.salesId === user?.id ? `/m/expense/${r.id}/edit` : `/m/expenses/${r.id}`}
           className="m-item"
           style={toneStyle(TONE_COLOR[statusTone(r.status)])}
         >

@@ -36,7 +36,7 @@ export default function AdvertisersPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ code: '', name: '', agencyIds: [] as string[] });
+  const [form, setForm] = useState({ code: '', name: '', agencyIds: [] as string[], isActive: true });
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const pagination = usePagination(advertisers);
@@ -55,12 +55,12 @@ export default function AdvertisersPage() {
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
-    setForm({ code: '', name: '', agencyIds: [] as string[] });
+    setForm({ code: '', name: '', agencyIds: [] as string[], isActive: true });
   };
 
   const startEdit = (a: Advertiser) => {
     setEditingId(a.id);
-    setForm({ code: a.code, name: a.name, agencyIds: (a.agencies ?? []).map((l) => l.agencyId) });
+    setForm({ code: a.code, name: a.name, agencyIds: (a.agencies ?? []).map((l) => l.agencyId), isActive: a.isActive });
     setShowForm(true);
   };
 
@@ -134,6 +134,12 @@ export default function AdvertisersPage() {
             <div className="form-row">
               <label>Name</label>
               <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            </div>
+            <div className="form-row">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+                Active
+              </label>
             </div>
             <div className="form-row" style={{ gridColumn: '1 / -1' }}>
               <label>Agencies ({form.agencyIds.length} selected)</label>

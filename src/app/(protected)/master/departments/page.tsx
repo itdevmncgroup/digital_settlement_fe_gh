@@ -6,6 +6,7 @@ import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
 import Modal from '@/components/Modal';
+import PillTabs from '@/components/PillTabs';
 import { useConfirm } from '@/components/ConfirmDialog';
 
 interface Option {
@@ -16,6 +17,9 @@ interface Option {
 interface SalesOption extends Option {
   employeeId: string;
   positionId: string | null;
+  email?: string;
+  unit?: Option | null;
+  position?: Option | null;
   roles: string[];
   departments: Option[];
 }
@@ -112,6 +116,7 @@ export default function DepartmentsPage() {
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
+  const [isActive, setIsActive] = useState(true);
 
   // Cascading Agency -> Advertiser -> Brand picker (staging area for the create form)
   const [pickerAgencyId, setPickerAgencyId] = useState('');
@@ -131,9 +136,11 @@ export default function DepartmentsPage() {
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('');
   const [busy, setBusy] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editTab, setEditTab] = useState<'coverage' | 'approvers' | 'members'>('coverage');
 
   const editDepartment = (id: string) => {
     setSelectedDepartmentId(id);
+    setEditTab('coverage');
     setEditModalOpen(true);
   };
 
@@ -195,6 +202,7 @@ export default function DepartmentsPage() {
   const resetForm = () => {
     setName('');
     setCode('');
+    setIsActive(true);
     setPickerAgencyId('');
     setPickerAdvertiserIds([]);
     setPickerBrandIds([]);
@@ -269,6 +277,7 @@ export default function DepartmentsPage() {
       const department = await api.post<DepartmentListItem>('/departments', {
         name,
         code: code || undefined,
+        isActive,
         assignments: assignments.length > 0 ? assignments : undefined,
       });
       // CreateDepartmentDto has no approvers field - the Department must exist
@@ -294,25 +303,30 @@ export default function DepartmentsPage() {
     selectedDepartment?.assignments.filter((a) => a.agencyId === manageAgencyId).map((a) => a.brand.id),
   );
   const selectedDepartmentMembers = salesOptions.filter((s) => s.departments.some((d) => d.id === selectedDepartmentId));
+  const memberPagination = usePagination(selectedDepartmentMembers, 10);
 
   const [editName, setEditName] = useState('');
   const [editCode, setEditCode] = useState('');
+  const [editActive, setEditActive] = useState(true);
   useEffect(() => {
     setEditName(selectedDepartment?.name ?? '');
     setEditCode(selectedDepartment?.code ?? '');
-  }, [selectedDepartment?.id, selectedDepartment?.name, selectedDepartment?.code]);
+    setEditActive(selectedDepartment?.isActive ?? true);
+  }, [selectedDepartment?.id, selectedDepartment?.name, selectedDepartment?.code, selectedDepartment?.isActive]);
 
   const saveDetails = async () => {
     if (!selectedDepartmentId) return;
     const nameChanged = editName.trim() && editName !== selectedDepartment?.name;
     const codeChanged = editCode !== (selectedDepartment?.code ?? '');
-    if (!nameChanged && !codeChanged) return;
+    const activeChanged = editActive !== (selectedDepartment?.isActive ?? true);
+    if (!nameChanged && !codeChanged && !activeChanged) return;
     setBusy(true);
     setError('');
     try {
       await api.patch(`/departments/${selectedDepartmentId}`, {
         name: nameChanged ? editName : undefined,
         code: codeChanged ? editCode || undefined : undefined,
+        isActive: activeChanged ? editActive : undefined,
       });
       load();
     } catch (err) {
@@ -388,9 +402,16 @@ export default function DepartmentsPage() {
     setManageApproverUserId('');
   }, [selectedDepartmentId]);
 
-  // User combobox only lists Users holding the chosen Position.
+  // User combobox only lists Users holding the chosen Position who are members of the Department being edited,
+  // minus Users already registered as an approver (of any Position) in it.
+  const registeredApproverIds = new Set(selectedDepartment?.approvers.map((a) => a.user.id) ?? []);
   const manageApproverUserOptions = manageApproverPositionId
-    ? salesOptions.filter((s) => s.positionId === manageApproverPositionId)
+    ? salesOptions.filter(
+        (s) =>
+          s.positionId === manageApproverPositionId &&
+          s.departments.some((d) => d.id === selectedDepartmentId) &&
+          !registeredApproverIds.has(s.id),
+      )
     : [];
 
   // Upserts (backend replaces the User already holding this Position for this
@@ -468,6 +489,12 @@ export default function DepartmentsPage() {
             <div className="form-row" style={{ marginTop: 0 }}>
               <label>Code (optional)</label>
               <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. SALES_MKT" />
+            </div>
+            <div className="form-row" style={{ marginTop: 0 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+                Active
+              </label>
             </div>
           </div>
 
@@ -694,206 +721,251 @@ export default function DepartmentsPage() {
       {editModalOpen && selectedDepartment && (
         <Modal title={`Edit Department: ${selectedDepartment.name}`} onClose={closeEditModal} wide>
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
+            <div className="form-row" style={{ flex: 2, marginTop: 0, minWidth: 200 }}>
               <label>Name</label>
               <input value={editName} onChange={(e) => setEditName(e.target.value)} />
             </div>
-            <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 160 }}>
+            <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 140 }}>
               <label>Code</label>
               <input value={editCode} onChange={(e) => setEditCode(e.target.value)} />
             </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 4px', whiteSpace: 'nowrap' }}>
+              <input type="checkbox" style={{ width: 'auto' }} checked={editActive} onChange={(e) => setEditActive(e.target.checked)} />
+              Active
+            </label>
             <button
               className="btn btn-primary"
-              disabled={busy || (editName === selectedDepartment.name && editCode === (selectedDepartment.code ?? ''))}
+              disabled={busy || (editName === selectedDepartment.name && editCode === (selectedDepartment.code ?? '') && editActive === selectedDepartment.isActive)}
               onClick={saveDetails}
             >
               Save
             </button>
           </div>
 
-          <div style={{ marginTop: 24 }}>
-            <h3>Members</h3>
-            <p style={{ color: 'var(--muted)', marginTop: -8 }}>
-              Which Sales belong to this Department - set from the User master page.
-            </p>
-            <table>
-              <thead>
-                <tr>
-                  <th>Sales</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedDepartmentMembers.map((m) => (
-                  <tr key={m.id}>
-                    <td>
-                      {m.name} ({m.employeeId})
-                    </td>
-                  </tr>
-                ))}
-                {selectedDepartmentMembers.length === 0 && (
-                  <tr>
-                    <td style={{ color: 'var(--muted)' }}>No members yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          {/* One section at a time, each list scrolls inside a fixed-height area, so the popup never grows taller than the screen. */}
+          <div style={{ marginTop: 16 }}>
+            <PillTabs
+              tabs={[
+                { key: 'coverage' as const, label: 'Coverage', count: selectedDepartment.assignments.length },
+                { key: 'approvers' as const, label: 'Approvers', count: selectedDepartment.approvers.length },
+                { key: 'members' as const, label: 'Members', count: selectedDepartmentMembers.length },
+              ]}
+              active={editTab}
+              onChange={setEditTab}
+            />
           </div>
 
-          <div style={{ marginTop: 24 }}>
-            <h3>Manage Coverage Pairs</h3>
-
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', margin: '12px 0', flexWrap: 'wrap' }}>
-              <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 160 }}>
-                <label>Agency</label>
-                <select value={manageAgencyId} onChange={(e) => setManageAgencyId(e.target.value)}>
-                  <option value="">Select agency</option>
-                  {agencies.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
+          {editTab === 'members' && (
+            <div>
+              <p style={{ color: 'var(--muted)', fontSize: 12, margin: '0 0 8px' }}>
+                Which Sales belong to this Department - set from the User master page.
+              </p>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Employee ID</th>
+                    <th>Email</th>
+                    <th>Unit</th>
+                    <th>Position</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {memberPagination.pageRows.map((m) => (
+                    <tr key={m.id}>
+                      <td>{m.name}</td>
+                      <td>{m.employeeId}</td>
+                      <td>{m.email ?? '-'}</td>
+                      <td>{m.unit?.name ?? '-'}</td>
+                      <td>{m.position?.name ?? '-'}</td>
+                    </tr>
                   ))}
-                </select>
-              </div>
-              <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
-                <label>Advertiser</label>
-                <select
-                  disabled={!manageAgencyId}
-                  value={manageAdvertiserIds[0] ?? ''}
-                  onChange={(e) => setManageAdvertiserIds(e.target.value ? [e.target.value] : [])}
-                >
-                  <option value="">Select advertiser</option>
-                  {manageAdvertisers.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
-                <label>Brand</label>
-                <select disabled={manageAdvertiserIds.length === 0} value={manageBrandId} onChange={(e) => setManageBrandId(e.target.value)}>
-                  <option value="">Select brand</option>
-                  {manageBrands.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <button className="btn btn-primary" disabled={!manageAgencyId || !manageBrandId || busy} onClick={addAssignmentToSelectedDepartment}>
-                Add
-              </button>
+                  {selectedDepartmentMembers.length === 0 && (
+                    <tr>
+                      <td colSpan={5} style={{ color: 'var(--muted)' }}>No members yet</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {selectedDepartmentMembers.length > 0 && (
+                <Pagination
+                  page={memberPagination.page}
+                  totalPages={memberPagination.totalPages}
+                  pageSize={memberPagination.pageSize}
+                  onPageChange={memberPagination.setPage}
+                  onPageSizeChange={memberPagination.setPageSize}
+                  total={memberPagination.total}
+                  rangeStart={memberPagination.rangeStart}
+                  rangeEnd={memberPagination.rangeEnd}
+                />
+              )}
             </div>
+          )}
 
-            <table>
-              <thead>
-                <tr>
-                  <th>Agency</th>
-                  <th>Brand</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedDepartment.assignments.map((a) => (
-                  <tr key={a.id}>
-                    <td>{a.agency.name}</td>
-                    <td>{a.brand.name}</td>
-                    <td>
-                      <button className="btn btn-danger" disabled={busy} onClick={() => removeAssignment(a)}>
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {selectedDepartment.assignments.length === 0 && (
-                  <tr>
-                    <td colSpan={3} style={{ color: 'var(--muted)' }}>No pairs yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div style={{ marginTop: 24 }}>
-            <h3>Approvers</h3>
-            <p style={{ color: 'var(--muted)', marginTop: -8 }}>
-              Who holds each Position (e.g. &quot;Head&quot;) for this specific Department - feeds the Approval
-              Level engine. One User per Position per Department; adding again for the same Position replaces
-              the current holder.
-            </p>
-
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', margin: '12px 0', flexWrap: 'wrap' }}>
-              <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
-                <label>Position</label>
-                <select
-                  value={manageApproverPositionId}
-                  onChange={(e) => {
-                    setManageApproverPositionId(e.target.value);
-                    setManageApproverUserId('');
-                  }}
-                >
-                  <option value="">Select position</option>
-                  {positions.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+          {editTab === 'coverage' && (
+            <div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 10, flexWrap: 'wrap' }}>
+                <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 150 }}>
+                  <label>Agency</label>
+                  <select value={manageAgencyId} onChange={(e) => setManageAgencyId(e.target.value)}>
+                    <option value="">Select agency</option>
+                    {agencies.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 150 }}>
+                  <label>Advertiser</label>
+                  <select
+                    disabled={!manageAgencyId}
+                    value={manageAdvertiserIds[0] ?? ''}
+                    onChange={(e) => setManageAdvertiserIds(e.target.value ? [e.target.value] : [])}
+                  >
+                    <option value="">Select advertiser</option>
+                    {manageAdvertisers.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 150 }}>
+                  <label>Brand</label>
+                  <select disabled={manageAdvertiserIds.length === 0} value={manageBrandId} onChange={(e) => setManageBrandId(e.target.value)}>
+                    <option value="">Select brand</option>
+                    {manageBrands.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button className="btn btn-primary" disabled={!manageAgencyId || !manageBrandId || busy} onClick={addAssignmentToSelectedDepartment}>
+                  Add
+                </button>
               </div>
-              <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 200 }}>
-                <label>Sales (User)</label>
-                <select
-                  disabled={!manageApproverPositionId}
-                  value={manageApproverUserId}
-                  onChange={(e) => setManageApproverUserId(e.target.value)}
-                >
-                  <option value="">{manageApproverPositionId ? 'Select user' : 'Select position first'}</option>
-                  {manageApproverUserOptions.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.employeeId})
-                    </option>
-                  ))}
-                </select>
+
+              <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Agency</th>
+                      <th>Brand</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedDepartment.assignments.map((a) => (
+                      <tr key={a.id}>
+                        <td>{a.agency.name}</td>
+                        <td>{a.brand.name}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          <button className="btn btn-danger" disabled={busy} onClick={() => removeAssignment(a)}>
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {selectedDepartment.assignments.length === 0 && (
+                      <tr>
+                        <td colSpan={3} style={{ color: 'var(--muted)' }}>No pairs yet</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
-              <button
-                className="btn btn-primary"
-                disabled={!manageApproverPositionId || !manageApproverUserId || busy}
-                onClick={addApproverToSelectedDepartment}
-              >
-                Add
-              </button>
             </div>
+          )}
 
-            <table>
-              <thead>
-                <tr>
-                  <th>Position</th>
-                  <th>Sales</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedDepartment.approvers.map((a) => (
-                  <tr key={a.id}>
-                    <td>{a.position.name}</td>
-                    <td>
-                      {a.user.name} ({a.user.employeeId})
-                    </td>
-                    <td>
-                      <button className="btn btn-danger" disabled={busy} onClick={() => removeApprover(a)}>
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {selectedDepartment.approvers.length === 0 && (
-                  <tr>
-                    <td colSpan={3} style={{ color: 'var(--muted)' }}>No approvers yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          {editTab === 'approvers' && (
+            <div>
+              <p style={{ color: 'var(--muted)', fontSize: 12, margin: '0 0 8px' }}>
+                Who holds each Position for this Department (feeds the Approval Level engine). One User per Position;
+                adding the same Position again replaces the holder.
+              </p>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 10, flexWrap: 'wrap' }}>
+                <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 180 }}>
+                  <label>Position</label>
+                  <select
+                    value={manageApproverPositionId}
+                    onChange={(e) => {
+                      setManageApproverPositionId(e.target.value);
+                      setManageApproverUserId('');
+                    }}
+                  >
+                    <option value="">Select position</option>
+                    {positions.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row" style={{ flex: 1, marginTop: 0, minWidth: 180 }}>
+                  <label>User</label>
+                  <select
+                    disabled={!manageApproverPositionId}
+                    value={manageApproverUserId}
+                    onChange={(e) => setManageApproverUserId(e.target.value)}
+                  >
+                    <option value="">
+                      {!manageApproverPositionId
+                        ? 'Select position first'
+                        : manageApproverUserOptions.length === 0
+                          ? 'No available user with this position in this department'
+                          : 'Select user'}
+                    </option>
+                    {manageApproverUserOptions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.employeeId})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  disabled={!manageApproverPositionId || !manageApproverUserId || busy}
+                  onClick={addApproverToSelectedDepartment}
+                >
+                  Add
+                </button>
+              </div>
+
+              <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Position</th>
+                      <th>Sales</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedDepartment.approvers.map((a) => (
+                      <tr key={a.id}>
+                        <td>{a.position.name}</td>
+                        <td>
+                          {a.user.name} ({a.user.employeeId})
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <button className="btn btn-danger" disabled={busy} onClick={() => removeApprover(a)}>
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {selectedDepartment.approvers.length === 0 && (
+                      <tr>
+                        <td colSpan={3} style={{ color: 'var(--muted)' }}>No approvers yet</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </Modal>
       )}
     </div>

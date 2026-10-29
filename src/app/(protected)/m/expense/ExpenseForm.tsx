@@ -335,11 +335,16 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   // must never overwrite either. Until then a scan replaces the default
   // (today / the loaded Expense's date).
   const dateLocked = useRef(false);
+  // The invoice file the current scan result belongs to, and what that scan filled into the form
+  // (see scanInvoice / clearOcr). formRef gives async code the latest form without a stale closure.
+  const ocrFile = useRef<File | null>(null);
+  const ocrFilled = useRef<{ merchantName?: string; amount?: string; expenseDate?: string; previousDate?: string }>({});
 
   // Edit mode only: the loaded Expense's current state.
   const [loadingExpense, setLoadingExpense] = useState(isEdit);
   const [loadError, setLoadError] = useState('');
   const [expenseStatus, setExpenseStatus] = useState<string | null>(null);
+  const [existingActivityTypeName, setExistingActivityTypeName] = useState('');
   const [existingPhotos, setExistingPhotos] = useState<UploadedFileRow[]>([]);
   const [existingInvoices, setExistingInvoices] = useState<{ id: string; files: UploadedFileRow[] }[]>([]);
 
@@ -348,11 +353,23 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   const invoiceCamera = useRef<HTMLInputElement>(null);
   const invoiceGallery = useRef<HTMLInputElement>(null);
 
+  const formRef = useRef(form);
+  formRef.current = form;
+
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
 
   useEffect(() => {
     api.get<Option[]>('/units?active=true').then(setUnits).catch(() => undefined);
-    api.get<Option[]>('/activity-types?active=true').then(setActivityTypes).catch(() => undefined);
+    api
+      .get<Option[]>('/activity-types?active=true')
+      .then((all) => {
+        // New Expense is Entertainment only (Flower Bouquet comes from an Expense Request). When editing,
+        // keep the Expense's own Activity Type selectable so the field doesn't go blank.
+        const entertainment = all.filter((a) => a.name === 'Entertainment');
+        setActivityTypes(entertainment);
+        if (!isEdit && entertainment.length === 1) setForm((f) => ({ ...f, activityTypeId: f.activityTypeId || entertainment[0].id }));
+      })
+      .catch(() => undefined);
     api.get<Option[]>('/agencies?active=true').then(setAgencies).catch(() => undefined);
     api.get<Option[]>('/advertisers?active=true').then(setAdvertisers).catch(() => undefined);
     api.get<PaymentMethodOption[]>('/payment-methods?active=true').then(setPaymentMethods).catch(() => undefined);
@@ -369,8 +386,10 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
     let cancelled = false;
     api
       .get<Option[]>(canAnyDepartment ? '/departments?active=true' : '/departments/me')
-      .then((d) => {
+      .then((list) => {
         if (cancelled) return;
+        // Ascending by name, numeric-aware so POD 2 comes before POD 10; the first one is the default pick.
+        const d = [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
         setDepartments(d);
         if (d.length > 0) setForm((f) => (f.departmentId ? f : { ...f, departmentId: d[0].id }));
       })
@@ -408,6 +427,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
       .get<ExpenseDetail>(`/expenses/${expenseId}`)
       .then((e) => {
         setExpenseStatus(e.status);
+        setExistingActivityTypeName(e.activityType.name);
         setForm({
           expenseDate: e.expenseDate.slice(0, 10),
           purpose: e.purpose,
@@ -542,43 +562,88 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
     setPhotos((p) => [...p, ...compressed]);
   };
 
-  // Every picked invoice image is OCR'd right away and prefills merchant/amount
-  // (only fields still empty, so manual edits are never overwritten) and the
-  // Expense Date (the transaction date on the invoice, unless already set - see
-  // dateLocked). OCR is best-effort - failure never blocks manual entry.
+  // Only the FIRST invoice picked is OCR'd (AWS Textract), right away, and
+  // prefills merchant/amount (only fields still empty, so manual edits are never
+  // overwritten) and the Expense Date (the transaction date on the invoice,
+  // unless already set - see dateLocked). Later invoices are only attached. The
+  // backend only OCRs images, so a PDF as first invoice is attached without a
+  // scan. OCR is best-effort - failure never blocks manual entry.
   const addInvoices = async (list: FileList | null) => {
     if (!list?.length) return;
     setNotice('');
+    const isFirstInvoice = invoices.length === 0;
     const picked = await Promise.all(Array.from(list).map(compressImage));
     setInvoices((p) => [...p, ...picked]);
-    const images = picked.filter((f) => f.type.startsWith('image/'));
-    if (images.length === 0) return;
+    const first = picked[0];
+    if (!isFirstInvoice || !first) return;
+    await scanInvoice(first);
+  };
+
+  const scanInvoice = async (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    ocrFile.current = file;
     setScanning(true);
     try {
-      for (const file of images) {
-        try {
-          const result = (await uploadFile('/invoices/ocr-scan', file)) as ParsedReceipt;
-          setOcr((prev) => prev ?? result);
-          const scannedDate = !dateLocked.current ? result.invoiceDate : null;
-          if (scannedDate) dateLocked.current = true;
-          setForm((f) => ({
-            ...f,
-            merchantName: f.merchantName || result.merchantName || '',
-            amount: f.amount || (result.total != null ? String(result.total) : ''),
-            expenseDate: scannedDate ?? f.expenseDate,
-          }));
-          setNotice(
-            result.total != null
-              ? `Invoice scanned - please check the merchant, amount${scannedDate ? ' and date' : ''} below.`
-              : 'Invoice scanned but no total was found - enter the amount manually.',
-          );
-        } catch (err) {
-          setNotice(err instanceof ApiError ? `Scan failed: ${err.message}` : 'Scan failed - enter the details manually.');
-        }
-      }
+      const result = (await uploadFile('/invoices/ocr-scan', file)) as ParsedReceipt;
+      // The scanned invoice was removed (or replaced) while the scan was running - drop the result.
+      if (ocrFile.current !== file) return;
+      setOcr(result);
+      const current = formRef.current;
+      const scannedDate = !dateLocked.current ? result.invoiceDate : null;
+      if (scannedDate) dateLocked.current = true;
+      const scannedAmount = result.total != null ? String(result.total) : '';
+      // Remember exactly what the scan filled in, so removing this invoice can undo just that.
+      ocrFilled.current = {
+        merchantName: !current.merchantName && result.merchantName ? result.merchantName : undefined,
+        amount: !current.amount && scannedAmount ? scannedAmount : undefined,
+        expenseDate: scannedDate ?? undefined,
+        previousDate: current.expenseDate,
+      };
+      setForm((f) => ({
+        ...f,
+        merchantName: f.merchantName || result.merchantName || '',
+        amount: f.amount || scannedAmount,
+        expenseDate: scannedDate ?? f.expenseDate,
+      }));
+      setNotice(
+        result.total != null
+          ? `Invoice scanned - please check the merchant, amount${scannedDate ? ' and date' : ''} below.`
+          : 'Invoice scanned but no total was found - enter the amount manually.',
+      );
+    } catch (err) {
+      if (ocrFile.current === file) setNotice(err instanceof ApiError ? `Scan failed: ${err.message}` : 'Scan failed - enter the details manually.');
     } finally {
-      setScanning(false);
+      if (ocrFile.current === file || ocrFile.current === null) setScanning(false);
     }
+  };
+
+  // Undo what the scan of the first invoice put into the form: Merchant, Amount and Date go back to
+  // empty / their previous value - but only those still holding the scanned value, so anything the
+  // user has typed over since is kept.
+  const clearOcr = () => {
+    const filled = ocrFilled.current;
+    const current = formRef.current;
+    ocrFilled.current = {};
+    ocrFile.current = null;
+    setOcr(null);
+    setNotice('');
+    setForm((f) => ({
+      ...f,
+      merchantName: filled.merchantName !== undefined && current.merchantName === filled.merchantName ? '' : f.merchantName,
+      amount: filled.amount !== undefined && current.amount === filled.amount ? '' : f.amount,
+      expenseDate: filled.expenseDate !== undefined && current.expenseDate === filled.expenseDate ? filled.previousDate ?? f.expenseDate : f.expenseDate,
+    }));
+    if (filled.expenseDate !== undefined && current.expenseDate === filled.expenseDate) dateLocked.current = false;
+  };
+
+  // Removing the first invoice drops its scan result; the next one in line becomes the first invoice
+  // and is scanned in its place (same rule as picking it first).
+  const removeInvoice = (index: number) => {
+    const rest = invoices.filter((_, j) => j !== index);
+    setInvoices(rest);
+    if (index !== 0) return;
+    clearOcr();
+    if (rest[0]) void scanInvoice(rest[0]);
   };
 
   // isDraft: keep the Expense out of the approval chain (still editable by
@@ -588,19 +653,20 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   // submit endpoint. Once it's no longer DRAFT there's a single "Save
   // Changes" button (isDraft is passed as true, i.e. "don't touch approval").
   const save = async (isDraft: boolean) => {
-    if (selAdvertisers.length === 0 || selBrands.length === 0 || !form.activityTypeId) {
-      toast.warning('Advertiser, Brand and Activity Type are required.');
-      return;
-    }
-    // Draft can stay incomplete (filled in later) - required as soon as it's
-    // actually submitted into the approval chain, mirroring the API's check.
-    if (!isDraft && !form.paymentMethodId) {
-      toast.warning('Payment method is required.');
-      return;
-    }
-    // Invoice and activity photo are likewise only enforced on submit (already
-    // saved files in edit mode count, not just the ones picked this session).
+    // A draft can stay incomplete (even just a scanned/uploaded invoice, the rest filled in
+    // later) - everything below is required as soon as it's actually submitted into the
+    // approval chain, mirroring the API's checks.
     if (!isDraft) {
+      if (selAdvertisers.length === 0 || selBrands.length === 0 || !form.activityTypeId) {
+        toast.warning('Advertiser, Brand and Activity Type are required.');
+        return;
+      }
+      if (!form.paymentMethodId) {
+        toast.warning('Payment method is required.');
+        return;
+      }
+      // Invoice and activity photo are likewise only enforced on submit (already
+      // saved files in edit mode count, not just the ones picked this session).
       const invoiceCount = invoices.length + existingInvoices.reduce((n, inv) => n + inv.files.length, 0);
       if (invoiceCount === 0) {
         toast.warning('Invoice is required before submitting.');
@@ -615,8 +681,8 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
     // in the extra* lists. Agency has no primary field, so every pick is sent.
     // A DRAFT's primary Advertiser/Brand can be changed too (PATCH accepts
     // them while status is DRAFT), so edit mode sends them like create does.
-    const primaryAdvertiserId = selAdvertisers[0].id;
-    const primaryBrandId = selBrands[0].id;
+    const primaryAdvertiserId = selAdvertisers[0]?.id;
+    const primaryBrandId = selBrands[0]?.id;
     const participants: { category: string; name: string; position?: string; company?: string; unitId?: string }[] = [
       ...[
         ...agencyParticipants.map((p) => ({ ...p, category: 'AGENCY' })),
@@ -632,7 +698,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
       toast.warning('Pick the requestor this expense is entered for.');
       return;
     }
-    if (!Number(form.amount)) {
+    if (!isDraft && !Number(form.amount)) {
       toast.warning('Amount is required.');
       return;
     }
@@ -657,7 +723,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
           amount: Number(form.amount),
           departmentId: form.departmentId || undefined,
           unitId: form.unitId || undefined,
-          activityTypeId: form.activityTypeId,
+          activityTypeId: form.activityTypeId || undefined,
           advertiserId: primaryAdvertiserId,
           brandId: primaryBrandId,
           extraAgencyIds: selAgencies.map((a) => a.id),
@@ -683,8 +749,8 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
           purpose: form.purpose,
           amount: Number(form.amount),
           departmentId: form.departmentId || undefined,
-          unitId: form.unitId,
-          activityTypeId: form.activityTypeId,
+          unitId: form.unitId || undefined,
+          activityTypeId: form.activityTypeId || undefined,
           advertiserId: primaryAdvertiserId,
           brandId: primaryBrandId,
           extraAgencyIds: selAgencies.length > 0 ? selAgencies.map((a) => a.id) : undefined,
@@ -726,7 +792,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
             payload.ocrConfidence = ocr.confidence ?? undefined;
           }
           if (form.merchantName) payload.finalMerchantName = form.merchantName;
-          payload.finalTotal = Number(form.amount);
+          if (Number(form.amount)) payload.finalTotal = Number(form.amount);
           const invoice = await api.post<{ id: string }>(`/expenses/${targetId}/invoices`, payload);
           for (const file of invoices) {
             await uploadFile(`/invoices/${invoice.id}/files`, file);
@@ -744,22 +810,12 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         return;
       }
 
-      if (isEdit) {
-        if (willSubmit) {
-          toast.success('Expense submitted for approval.');
-          router.push('/m/dashboard');
-        } else {
-          toast.success('Changes saved.');
-          setPhotos([]);
-          setInvoices([]);
-          setOcr(null);
-          await loadExpense();
-        }
-      } else {
-        // A draft stays with Sales to keep editing - land on its edit page
-        // instead of the dashboard, since it's not gone into approval yet.
-        router.push(isDraft ? `/m/expense/${targetId}/edit` : '/m/dashboard');
-      }
+      // Every successful save - draft or submit, new or edit - ends on the dashboard. A draft is
+      // reopened from there (it is listed with the Sales' own expenses) when they want to continue.
+      if (willSubmit) toast.success('Expense submitted for approval.');
+      else if (isDraft) toast.success('Draft saved.');
+      else if (isEdit) toast.success('Changes saved.');
+      router.push('/m/dashboard');
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Save failed');
     } finally {
@@ -821,7 +877,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
             </div>
             <input ref={invoiceCamera} type="file" accept="image/*" capture="environment" style={hidden} onChange={(e) => { addInvoices(e.target.files); e.target.value = ''; }} />
             <input ref={invoiceGallery} type="file" accept="image/*,application/pdf" multiple style={hidden} onChange={(e) => { addInvoices(e.target.files); e.target.value = ''; }} />
-            <NewPhotoGrid files={invoices} onRemove={(i) => setInvoices((p) => p.filter((_, j) => j !== i))} />
+            <NewPhotoGrid files={invoices} onRemove={removeInvoice} />
             {notice && <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 8 }}>{notice}</div>}
           </>
         )}
@@ -903,10 +959,16 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         <div className="form-row">
           <label>Activity type *</label>
           <select required value={form.activityTypeId} onChange={(e) => set({ activityTypeId: e.target.value })} style={field}>
-            <option value="">Select...</option>
+            {/* Only one choice (already selected) -> no "Select..." placeholder. */}
+            {!(form.activityTypeId && activityTypes.length + (activityTypes.some((o) => o.id === form.activityTypeId) ? 0 : 1) === 1) && (
+              <option value="">Select...</option>
+            )}
             {activityTypes.map((o) => (
               <option key={o.id} value={o.id}>{o.name}</option>
             ))}
+            {form.activityTypeId && !activityTypes.some((o) => o.id === form.activityTypeId) && (
+              <option value={form.activityTypeId}>{existingActivityTypeName}</option>
+            )}
           </select>
         </div>
 

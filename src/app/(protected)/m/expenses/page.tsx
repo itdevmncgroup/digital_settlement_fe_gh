@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import WebMobileGate from '@/components/WebMobileGate';
+import { useConfirm } from '@/components/ConfirmDialog';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/date';
 import { formatCurrency, SkeletonList, StatusBadge, statusTone, TONE_COLOR, toneStyle } from '@/lib/mobileUi';
@@ -26,10 +27,10 @@ interface ExpenseRow {
 // Own expenses (any status) open the mobile Expense form - same look as New
 // Expense, read-only once past DRAFT (see ExpenseForm's `readOnly`). Anything
 // not owned by the viewer (Sales Admin / back office browsing others' Expenses)
-// keeps opening the general expense detail page.
+// open the mobile expense detail page (/m/expenses/[id]).
 function expenseHref(r: ExpenseRow, viewerId: string | undefined) {
   if (r.salesId === viewerId) return `/m/expense/${r.id}/edit`;
-  return `/expenses/${r.id}`;
+  return `/m/expenses/${r.id}`;
 }
 
 const isoDaysAgo = (days: number) => {
@@ -48,6 +49,7 @@ export default function MobileExpensesPage() {
 
 function MobileExpensesList() {
   const { user, hasRole, hasPermission } = useAuth();
+  const confirm = useConfirm();
   // webmobile.expense.read.owndept shows every row the API returns (its Department scope is
   // enforced there); with only .read.own the list narrows to Expenses the user owns or keyed in.
   const seeDept = hasRole('ADMINISTRATOR') || hasPermission('webmobile.expense.read.owndept');
@@ -57,6 +59,29 @@ function MobileExpensesList() {
   const [searchInput, setSearchInput] = useState('');
   const [status, setStatus] = useState('');
   const [days, setDays] = useState('30');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const canDeleteDraft = (r: ExpenseRow) =>
+    r.status === 'DRAFT' && hasPermission('webmobile.expense_draft.delete.own') && (r.createdById ?? r.salesId) === user?.id;
+
+  const deleteDraft = async (r: ExpenseRow) => {
+    const ok = await confirm({
+      title: 'Delete draft?',
+      message: `Draft ${r.expenseNo} will be permanently deleted. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setDeletingId(r.id);
+    setError('');
+    try {
+      await api.del(`/expenses/${r.id}`);
+      setRows((prev) => (prev ? prev.filter((x) => x.id !== r.id) : prev));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete draft');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   useEffect(() => {
     const params = new URLSearchParams({ status: 'ALL', fromDate: isoDaysAgo(Number(days)) });
@@ -134,6 +159,21 @@ function MobileExpensesList() {
             {r.purpose ? ` · ${r.purpose}` : ''}
           </div>
           <StatusBadge status={r.status} />
+          {canDeleteDraft(r) && (
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={deletingId === r.id}
+              style={{ marginTop: 8 }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                deleteDraft(r);
+              }}
+            >
+              {deletingId === r.id ? 'Deleting...' : 'Delete'}
+            </button>
+          )}
         </Link>
       ))}
     </div>

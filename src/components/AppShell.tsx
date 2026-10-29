@@ -8,9 +8,11 @@ import { useAutoMatch } from '@/lib/autoMatch';
 import { useIdleLogout } from '@/lib/useIdleLogout';
 import { getTheme, toggleTheme, Theme } from '@/lib/theme';
 import { NavIcon } from './NavIcons';
+import BrandLogo from './BrandLogo';
 import SplashLoader from './SplashLoader';
 import { positionMatches } from '@/lib/position';
 import { resolveViewMode, ViewMode, VIEW_STORAGE_KEY } from '@/lib/viewMode';
+import { loginUrlFor } from '@/lib/loginRedirect';
 
 interface NavItem {
   href: string;
@@ -18,6 +20,8 @@ interface NavItem {
   // Shorter text for the bottom tab bar (falls back to label).
   tabLabel?: string;
   icon: string;
+  // Desktop sidebar: hide the icon while the sidebar is expanded (the collapsed, icon-only sidebar still needs it).
+  hideIconWhenExpanded?: boolean;
   roles: string[];
   permissions?: string[];
   // When set, only users whose Position.code is listed see the item.
@@ -28,11 +32,15 @@ interface NavItem {
   // Extra gate on top of roles/positions: the user must also hold one of these (ADMINISTRATOR
   // exempt). Used by the Web Mobile dashboards - webmobile.dashboard.read.* decides who gets one.
   requirePermissions?: string[];
+  // Other route prefixes that belong to this item, so it stays highlighted there (e.g. Flower Bouquet's Expense tab).
+  alsoActive?: string[];
 }
 
 interface NavGroup {
   section: string;
   items: NavItem[];
+  // Single top-level link: rendered as a plain menu item, with no collapsible group header.
+  standalone?: boolean;
 }
 
 // Phone-friendly pages under /m. Shown as a sidebar group for everyone allowed,
@@ -136,23 +144,16 @@ const NAV: NavGroup[] = [
     section: 'Dashboard',
     items: [
       {
-        href: '/dashboard/executive',
-        label: 'Executive Dashboard',
-        icon: 'dashboard',
-        roles: ['ADMINISTRATOR', 'MANAGEMENT'],
-        permissions: ['dashboard.read.all', 'dashboard.read.owndept', 'dashboard.executive.read.owndept'],
-      },
-      {
         href: '/expense-dashboard',
-        label: 'Expense Dashboard',
-        icon: 'dashboard',
+        label: 'Transaction Dashboard',
+        icon: 'dashboard-transaction',
         roles: ['ADMINISTRATOR', 'MANAGEMENT'],
         permissions: ['dashboard.read.all', 'dashboard.read.owndept', 'dashboard.expense.read.owndept'],
       },
       {
         href: '/dashboard/settlement',
         label: 'Settlement Dashboard',
-        icon: 'dashboard',
+        icon: 'dashboard-settlement',
         roles: ['ADMINISTRATOR', 'MANAGEMENT'],
         permissions: ['dashboard.read.all', 'dashboard.read.owndept', 'dashboard.settlement.read.owndept'],
       },
@@ -161,21 +162,41 @@ const NAV: NavGroup[] = [
   {
     section: 'Transaction',
     items: [
-      { href: '/expense-requests', label: 'Expense Request', icon: 'expenses', roles: [] },
-      { href: '/expenses', label: 'All Expenses', icon: 'expenses', roles: [] },
+      { href: '/expenses', label: 'Entertainment', icon: 'entertainment', roles: [] },
+      // Tabs: Expense Request (this route) and Expense (/flower-bouquet/expenses).
+      { href: '/expense-requests', label: 'Flower Bouquet', icon: 'flower', roles: [], alsoActive: ['/flower-bouquet'] },
+    ],
+  },
+  {
+    section: 'Settlement',
+    items: [
+      {
+        href: '/settlement',
+        label: 'Entertainment',
+        icon: 'settlement',
+        roles: ['ADMINISTRATOR'],
+        permissions: ['settlement.create.owndept', 'settlement.read.owndept', 'settlement.read.all'],
+      },
+      {
+        href: '/settlement/flower-bouquet',
+        label: 'Flower Bouquet',
+        icon: 'settlement',
+        roles: ['ADMINISTRATOR'],
+        permissions: ['settlement.create.owndept', 'settlement.read.owndept', 'settlement.read.all'],
+      },
+    ],
+  },
+  {
+    section: 'Approval',
+    standalone: true,
+    items: [
       {
         href: '/approvals',
         label: 'Approval',
         icon: 'approval',
+        hideIconWhenExpanded: true,
         roles: ['ADMINISTRATOR', 'MANAGEMENT'],
         permissions: ['expense.approve.all', 'expense.approve.owndept'],
-      },
-      {
-        href: '/settlement',
-        label: 'Settlement',
-        icon: 'settlement',
-        roles: ['ADMINISTRATOR'],
-        permissions: ['settlement.create.owndept', 'settlement.read.owndept', 'settlement.read.all'],
       },
     ],
   },
@@ -228,6 +249,14 @@ const NAV: NavGroup[] = [
 
 const SIDEBAR_STORAGE_KEY = 'sidebarCollapsed';
 
+function RedirectTo({ href }: { href: string }) {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(href);
+  }, [href, router]);
+  return <SplashLoader message="Opening mobile view" />;
+}
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const { user, loading, logout, hasRole, hasPermission } = useAuth();
   const { running, progress } = useAutoMatch();
@@ -238,9 +267,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // current path, so sibling routes that happen to share a prefix (e.g.
   // /dashboard vs /dashboard/executive) don't all light up together.
   const activeHref = NAV.flatMap((g) => g.items)
-    .map((item) => item.href)
-    .filter((href) => pathname === href || pathname?.startsWith(`${href}/`))
-    .sort((a, b) => b.length - a.length)[0];
+    .flatMap((item) => [item.href, ...(item.alsoActive ?? [])].map((prefix) => ({ href: item.href, prefix })))
+    .filter(({ prefix }) => pathname === prefix || pathname?.startsWith(`${prefix}/`))
+    .sort((a, b) => b.prefix.length - a.prefix.length)[0]?.href;
   const activeSection = NAV.find((g) => g.items.some((item) => item.href === activeHref))?.section ?? null;
 
   const [theme, setThemeState] = useState<Theme>('light');
@@ -261,11 +290,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     setThemeState(getTheme());
     setCollapsed(localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1');
-    setViewModeState(resolveViewMode());
+    // An email's "Mobile Mode" link carries ?view=mobile: open the phone layout whatever view was saved.
+    if (new URLSearchParams(window.location.search).get('view') === 'mobile') {
+      localStorage.setItem(VIEW_STORAGE_KEY, 'mobile');
+      setViewModeState('mobile');
+    } else {
+      setViewModeState(resolveViewMode());
+    }
   }, []);
 
   useEffect(() => {
-    if (!loading && !user) router.replace('/login');
+    // Remember where the visitor was heading (e.g. an email deep link) so login can send them back there.
+    if (!loading && !user) router.replace(loginUrlFor(`${window.location.pathname}${window.location.search}`));
   }, [loading, user, router]);
 
   useIdleLogout(!!user, logout);
@@ -314,12 +350,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const canNewRequest = !!newRequestItem && isVisible(newRequestItem);
   const onNewFormPage = pathname === '/m/expense/new' || pathname === '/m/expense-requests/new';
 
+  // Mobile view (and SALES, locked to it) may only open the web mobile pages under /m.
+  // Any other URL (typed in, bookmarked, left over from desktop view) is sent to the first tab.
+  const outsideMobile = !!pathname && !/^\/m(\/|$)/.test(pathname);
+  if (bottomNav && outsideMobile && tabs.length > 0) {
+    return <RedirectTo href={tabs[0].href} />;
+  }
+
   if (bottomNav) {
     return (
       <div className="mobile-shell">
         <header className="mobile-topbar">
           <div className="mobile-brand">
-            <span className="mobile-brand-mark"><NavIcon name="logo" /></span>
+            <BrandLogo variant="mark" height={30} />
             <div className="mobile-brand-text">
               <strong>{user.name}</strong>
               <span>{user.position?.name ?? user.roles.join(', ')}</span>
@@ -351,13 +394,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   {canNewExpense && (
                     <Link href="/m/expense/new" className="fab-menu-item" role="menuitem" onClick={() => setFabOpen(false)}>
                       <span className="nav-icon"><NavIcon name="expenses" /></span>
-                      New Expense
+                      Entertainment
                     </Link>
                   )}
                   {canNewRequest && (
                     <Link href="/m/expense-requests/new" className="fab-menu-item" role="menuitem" onClick={() => setFabOpen(false)}>
                       <span className="nav-icon"><NavIcon name="expenses" /></span>
-                      New Request
+                      Flower Bouquet
                     </Link>
                   )}
                 </div>
@@ -398,7 +441,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <aside className={`sidebar${effectiveCollapsed ? ' collapsed' : ''}${mobileOpen ? ' mobile-open' : ''}`}>
         <div className="sidebar-head">
           <div className="brand">
-            <span className="brand-mark"><NavIcon name="logo" /></span>
+            <BrandLogo variant="mark" height={26} />
             {!effectiveCollapsed && <span className="gradient-text">Digital Settlement</span>}
           </div>
           <button
@@ -416,10 +459,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
             const visibleItems = group.items.filter(isVisible);
             if (visibleItems.length === 0) return null;
             // Icon-only sidebar has no labels to click, so groups stay open there.
-            const groupClosed = !effectiveCollapsed && openGroup !== group.section;
+            const groupClosed = !group.standalone && !effectiveCollapsed && openGroup !== group.section;
             return (
               <div key={group.section}>
-                {effectiveCollapsed ? (
+                {group.standalone ? null : effectiveCollapsed ? (
                   <div className="group-label">
                     <span>{group.section}</span>
                   </div>
@@ -441,7 +484,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
                     className={item.href === activeHref ? 'active' : ''}
                     title={effectiveCollapsed ? item.label : undefined}
                   >
-                    <span className="nav-icon"><NavIcon name={item.icon} /></span>
+                    {!(item.hideIconWhenExpanded && !effectiveCollapsed) && (
+                      <span className="nav-icon"><NavIcon name={item.icon} /></span>
+                    )}
                     {!effectiveCollapsed && <span className="nav-label">{item.label}</span>}
                   </Link>
                 ))}

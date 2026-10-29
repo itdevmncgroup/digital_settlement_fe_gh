@@ -35,7 +35,7 @@ export default function BrandsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ code: '', name: '', advertiserId: '' });
+  const [form, setForm] = useState({ code: '', name: '', advertiserId: '', isActive: true });
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const pagination = usePagination(brands);
@@ -51,12 +51,12 @@ export default function BrandsPage() {
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
-    setForm({ code: '', name: '', advertiserId: '' });
+    setForm({ code: '', name: '', advertiserId: '', isActive: true });
   };
 
   const startEdit = (b: Brand) => {
     setEditingId(b.id);
-    setForm({ code: b.code, name: b.name, advertiserId: b.advertiser?.id ?? '' });
+    setForm({ code: b.code, name: b.name, advertiserId: b.advertiser?.id ?? '', isActive: b.isActive });
     setShowForm(true);
   };
 
@@ -129,6 +129,12 @@ export default function BrandsPage() {
             <div className="form-row">
               <label>Name</label>
               <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            </div>
+            <div className="form-row">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+                Active
+              </label>
             </div>
             <div className="form-row" style={{ gridColumn: '1 / -1' }}>
               <label>Advertiser</label>

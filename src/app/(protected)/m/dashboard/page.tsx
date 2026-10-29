@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
 import SplashLoader from '@/components/SplashLoader';
 import DepartmentTotalsCard, { DepartmentTotal } from '@/components/DepartmentTotalsCard';
+import TopPartiesCards, { TopParties } from '@/components/TopPartiesCards';
 import WebMobileGate from '@/components/WebMobileGate';
 import { useAuth } from '@/lib/auth';
 import { positionMatches } from '@/lib/position';
@@ -46,6 +47,7 @@ interface SalesDashboard {
   recent: ExpenseSummaryRow[];
   // One row per Department of the user - only sent when they belong to more than one.
   byDepartment?: DepartmentTotal[];
+  topParties?: TopParties;
 }
 
 // Own expenses (any status) open the mobile Expense form - same look as New
@@ -53,7 +55,7 @@ interface SalesDashboard {
 // else's Expense (the recent list can include non-owned rows
 // for back-office/Sales Admin roles) keeps opening the general detail page.
 function expenseHref(r: ExpenseSummaryRow, viewerId: string | undefined) {
-  return r.salesId === viewerId ? `/m/expense/${r.id}/edit` : `/expenses/${r.id}`;
+  return r.salesId === viewerId ? `/m/expense/${r.id}/edit` : `/m/expenses/${r.id}`;
 }
 
 function RecentList({ rows, viewerId }: { rows: ExpenseSummaryRow[]; viewerId: string | undefined }) {
@@ -245,6 +247,7 @@ function SalesDashboardView() {
           </div>
 
           <DepartmentTotalsCard data={data.byDepartment} title={`Expense per department · ${rangeLabel}`} />
+          <TopPartiesCards data={data.topParties} suffix={rangeLabel} />
 
           <div className="m-section-title">Latest expenses</div>
           <RecentList rows={data.recent} viewerId={user?.id} />

@@ -15,7 +15,7 @@ import {
 } from '@/lib/expenseRequests';
 import { SkeletonList, TONE_COLOR, toneStyle } from '@/lib/mobileUi';
 
-// Expense Requests (Karangan Bunga). With webmobile.request.expense.read.owndept: those of the
+// Expense Requests (Flower Bouquet). With webmobile.request.expense.read.owndept: those of the
 // logged-in user's Department(s), plus any outside them where the user is one of its approvers,
 // so nothing they must act on is hidden. With only .read.own: just the ones they requested.
 // Tap a row for the detail (and Approve/Reject when it's the user's turn).

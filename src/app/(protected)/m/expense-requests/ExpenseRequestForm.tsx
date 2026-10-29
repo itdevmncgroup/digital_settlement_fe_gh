@@ -9,8 +9,13 @@ import ClientPartiesPicker, { ClientParties, EMPTY_PARTIES } from '@/components/
 import { useAuth } from '@/lib/auth';
 import { ExpenseRequest } from '@/lib/expenseRequests';
 
-// New / edit Expense Request (Karangan Bunga), entered by Sales Admin. Locked to
-// the "Karangan Bunga" Activity Type (the only one the BE currently accepts for
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// New / edit Expense Request (Flower Bouquet), entered by Sales Admin. Locked to
+// the "Flower Bouquet" Activity Type (the only one the BE currently accepts for
 // this flow - see ALLOWED_ACTIVITY_TYPE_NAMES in expense-requests.service.ts).
 // "Save Draft" keeps it editable (status DRAFT, no approval chain yet);
 // "Submit" sends it into the Head Dept -> Co-CSO approval chain. Passing
@@ -57,7 +62,7 @@ export default function ExpenseRequestForm({ request }: { request?: ExpenseReque
   );
   const [budget, setBudget] = useState(request?.requestBudget ? String(Math.round(Number(request.requestBudget))) : '');
   const [greetingText, setGreetingText] = useState(request?.greetingText ?? '');
-  const [sendDate, setSendDate] = useState(request?.sendDate ? request.sendDate.slice(0, 10) : '');
+  const [sendDate, setSendDate] = useState(request?.sendDate ? request.sendDate.slice(0, 10) : todayIso());
   const [recipient, setRecipient] = useState(request?.recipient ?? '');
   const [recipientAddress, setRecipientAddress] = useState(request?.recipientAddress ?? '');
   const [logo, setLogo] = useState(request?.logo ?? '');
@@ -67,7 +72,7 @@ export default function ExpenseRequestForm({ request }: { request?: ExpenseReque
     api
       .get<Option[]>('/activity-types?active=true')
       .then((all) => {
-        const karanganBunga = all.filter((a) => a.name === 'Karangan Bunga');
+        const karanganBunga = all.filter((a) => a.name === 'Flower Bouquet');
         setActivityTypes(karanganBunga);
         if (karanganBunga.length === 1) setActivityTypeId(karanganBunga[0].id);
       })

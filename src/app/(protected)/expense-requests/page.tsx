@@ -12,7 +12,8 @@ import NumberInput from '@/components/NumberInput';
 import ClientPartiesPicker, { ClientParties, EMPTY_PARTIES } from '@/components/ClientPartiesPicker';
 import { clientLabel } from '@/lib/expenseRequests';
 import Pagination from '@/components/Pagination';
-import SearchBox from '@/components/SearchBox';
+import FlowerBouquetTabs from '@/components/FlowerBouquetTabs';
+import TransactionTotalsCards, { sumByBucket, TotalsBucket } from '@/components/TransactionTotalsCards';
 import { usePrompt } from '@/components/PromptDialog';
 import { usePagination } from '@/lib/usePagination';
 
@@ -28,7 +29,7 @@ type ExpenseRequestStatus = 'DRAFT' | 'PENDING_APPROVAL' | 'BUDGET_INPUT' | 'COR
 interface ExpenseRequestRow {
   id: string;
   requestNo: string;
-  requestedBy: { id: string; name: string };
+  requestedBy: { id: string; name: string; unitId?: string | null };
   department: { id: string; name: string } | null;
   activityType: Option;
   clientName: string | null;
@@ -58,7 +59,7 @@ interface Option {
 
 // Activity Type is locked to a single choice for now; more names can be appended here
 // (the API enforces the same allow-list).
-const ALLOWED_ACTIVITY_TYPES = ['Karangan Bunga'];
+const ALLOWED_ACTIVITY_TYPES = ['Flower Bouquet'];
 
 // The Sales Admin sent the Request's Expense back: Corsec updates its invoice (see POST/PATCH
 // /expenses/from-request/:id) instead of adding one.
@@ -99,7 +100,7 @@ function formatCurrency(value: string | number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(value));
 }
 
-// Expense Request (Karangan Bunga), entered by Sales Admin. Head Dept -> Co-CSO
+// Expense Request (Flower Bouquet), entered by Sales Admin. Head Dept -> Co-CSO
 // approve, then Sales Customer Service fills the budget, then Corsec verifies.
 export default function ExpenseRequestsPage() {
   const { user, hasRole, hasPermission } = useAuth();
@@ -110,8 +111,6 @@ export default function ExpenseRequestsPage() {
   const canVerify = user?.position?.code === POSITION_CORSEC || isAdmin;
 
   const [rows, setRows] = useState<ExpenseRequestRow[]>([]);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -168,18 +167,72 @@ export default function ExpenseRequestsPage() {
   // Only asked when the requester has no single unambiguous Department.
   const needsDepartment = departments.length !== 1;
 
-  // Client-side filter: the list is already scoped by the API, no server-side search needed.
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) =>
-      [r.requestNo, r.requestedBy?.name, r.department?.name, r.activityType?.name, clientLabel(r), r.brands?.map((b) => b.brand.name).join(' '), r.greetingText, r.recipient, r.recipientAddress, STATUS_LABEL[r.status]]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q)),
-    );
-  }, [rows, search]);
+  // Search panel: Department / Status / Send date / Agency / Advertiser / Budget, All
+  // client-side: the list is already scoped by the API, no server-side search needed.
+  const [departmentFilter, setDepartmentFilter] = useState('');
+  const [unitFilter, setUnitFilter] = useState('');
+  const [unitOptions, setUnitOptions] = useState<Option[]>([]);
+  useEffect(() => {
+    api.get<Option[]>('/units?active=true').then(setUnitOptions).catch(() => undefined);
+  }, []);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [agencyFilter, setAgencyFilter] = useState('');
+  const [advertiserFilter, setAdvertiserFilter] = useState('');
+  const [minBudget, setMinBudget] = useState('');
+  const [maxBudget, setMaxBudget] = useState('');
+  const resetFilters = () => {
+    setDepartmentFilter('');
+    setUnitFilter('');
+    setStatusFilter('');
+    setFromDate('');
+    setToDate('');
+    setAgencyFilter('');
+    setAdvertiserFilter('');
+    setMinBudget('');
+    setMaxBudget('');
+    setBucketFilter(null);
+  };
 
-  const pagination = usePagination(filtered);
+  const departmentFilterOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const r of rows) if (r.department) byId.set(r.department.id, r.department.name);
+    return Array.from(byId, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows]);
+  const agencyNameOptions = useMemo(() => Array.from(new Set(rows.flatMap((r) => r.agencies.map((a) => a.agency.name)))).sort(), [rows]);
+  const advertiserNameOptions = useMemo(
+    () => Array.from(new Set(rows.flatMap((r) => r.advertisers.map((a) => a.advertiser.name)))).sort(),
+    [rows],
+  );
+
+  const filtered = useMemo(() => {
+    const agencyQ = agencyFilter.trim().toLowerCase();
+    const advertiserQ = advertiserFilter.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (departmentFilter && r.department?.id !== departmentFilter) return false;
+      if (unitFilter && r.requestedBy?.unitId !== unitFilter) return false;
+      if (statusFilter && r.status !== statusFilter) return false;
+      // sendDate is a calendar day, so its first 10 characters (yyyy-mm-dd) compare directly with the pickers.
+      const day = r.sendDate.slice(0, 10);
+      if ((fromDate && day < fromDate) || (toDate && day > toDate)) return false;
+      if (agencyQ && !r.agencies.some((a) => a.agency.name.toLowerCase().includes(agencyQ))) return false;
+      if (advertiserQ && !r.advertisers.some((a) => a.advertiser.name.toLowerCase().includes(advertiserQ))) return false;
+      // Budget = what Sales CS filled in, else what the requester asked for.
+      const budget = Number(r.budgetAmount ?? r.requestBudget ?? 0);
+      if (minBudget !== '' && budget < Number(minBudget)) return false;
+      if (maxBudget !== '' && budget > Number(maxBudget)) return false;
+      return true;
+    });
+  }, [rows, departmentFilter, unitFilter, statusFilter, fromDate, toDate, agencyFilter, advertiserFilter, minBudget, maxBudget]);
+
+  // Completed = Corsec said Proceed; Rejected = rejected in the chain or cancelled by Corsec; Pending = the rest.
+  const requestBucket = (r: ExpenseRequestRow): TotalsBucket =>
+    r.status === 'PROCEED' ? 'complete' : r.status === 'REJECTED' || r.status === 'CANCELLED' ? 'rejected' : 'pending';
+  // Clicking a totals card narrows the table to that bucket (the cards keep showing every bucket's total).
+  const [bucketFilter, setBucketFilter] = useState<TotalsBucket | null>(null);
+  const visibleRows = bucketFilter ? filtered.filter((r) => requestBucket(r) === bucketFilter) : filtered;
+  const pagination = usePagination(visibleRows);
 
   // The only actionable approval step is the current one (approval is strictly sequential).
   const currentStepOf = (r: ExpenseRequestRow) => {
@@ -335,20 +388,92 @@ export default function ExpenseRequestsPage() {
 
   return (
     <div>
+      <FlowerBouquetTabs active="request" />
       <div className="toolbar">
         <h1>Expense Request</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <SearchBox
-            placeholder="Search client, greeting, address..."
-            value={searchInput}
-            onChange={setSearchInput}
-            onSearch={() => setSearch(searchInput)}
-          />
           {canCreate && (
             <button className="btn btn-primary" onClick={() => setShowForm(true)}>
               Create Request
             </button>
           )}
+        </div>
+      </div>
+
+      <TransactionTotalsCards
+        totals={sumByBucket(
+          filtered,
+          requestBucket,
+          // Budget = what Sales CS filled in, else what the requester asked for.
+          (r) => r.budgetAmount ?? r.requestBudget ?? 0,
+        )}
+        selected={bucketFilter}
+        onSelect={setBucketFilter}
+      />
+
+      <div className="toolbar" style={{ marginTop: -4 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ width: 190 }}>
+            <option value="">All Departments</option>
+            {departmentFilterOptions.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+          <select value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)} style={{ width: 170 }}>
+            <option value="">All Units (requestor)</option>
+            {unitOptions.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: 190 }}>
+            <option value="">All Status</option>
+            {(Object.keys(STATUS_LABEL) as ExpenseRequestStatus[]).map((st) => (
+              <option key={st} value={st}>
+                {STATUS_LABEL[st]}
+              </option>
+            ))}
+          </select>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
+            Send date From
+            <DatePicker value={fromDate} onChange={setFromDate} style={{ width: 150 }} />
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--muted)' }}>
+            To
+            <DatePicker value={toDate} onChange={setToDate} style={{ width: 150 }} />
+          </label>
+          <input
+            list="request-filter-agencies"
+            placeholder="Search agency..."
+            value={agencyFilter}
+            onChange={(e) => setAgencyFilter(e.target.value)}
+            style={{ width: 170 }}
+          />
+          <datalist id="request-filter-agencies">
+            {agencyNameOptions.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+          <input
+            list="request-filter-advertisers"
+            placeholder="Search advertiser..."
+            value={advertiserFilter}
+            onChange={(e) => setAdvertiserFilter(e.target.value)}
+            style={{ width: 170 }}
+          />
+          <datalist id="request-filter-advertisers">
+            {advertiserNameOptions.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+          <NumberInput placeholder="Min budget" value={minBudget} onChange={setMinBudget} style={{ width: 140 }} />
+          <NumberInput placeholder="Max budget" value={maxBudget} onChange={setMaxBudget} style={{ width: 140 }} />
+          <button type="button" className="btn" onClick={resetFilters}>
+            Reset
+          </button>
         </div>
       </div>
 
@@ -405,34 +530,34 @@ export default function ExpenseRequestsPage() {
                     {r.rejectReason && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 2 }}>{r.rejectReason}</div>}
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: 6 }}>
+                    <div className="row-actions">
                       {canActOnApproval(r) && (
                         <>
-                          <button className="btn btn-approve" disabled={busyId === r.id} onClick={() => approve(r)}>
+                          <button className="btn btn-approve btn-xs" disabled={busyId === r.id} onClick={() => approve(r)}>
                             Approve ({step?.position.name})
                           </button>
-                          <button className="btn btn-reject" disabled={busyId === r.id} onClick={() => reject(r)}>
+                          <button className="btn btn-reject btn-xs" disabled={busyId === r.id} onClick={() => reject(r)}>
                             Reject
                           </button>
                         </>
                       )}
                       {r.status === 'BUDGET_INPUT' && canFillBudget && (
-                        <button className="btn btn-primary" disabled={busyId === r.id} onClick={() => openBudget(r)}>
+                        <button className="btn btn-primary btn-xs" disabled={busyId === r.id} onClick={() => openBudget(r)}>
                           Input Budget
                         </button>
                       )}
                       {r.status === 'CORSEC_VERIFICATION' && canVerify && (
                         <>
-                          <button className="btn btn-approve" disabled={busyId === r.id} onClick={() => proceed(r)}>
+                          <button className="btn btn-approve btn-xs" disabled={busyId === r.id} onClick={() => proceed(r)}>
                             Proceed
                           </button>
-                          <button className="btn btn-reject" disabled={busyId === r.id} onClick={() => openCancel(r)}>
+                          <button className="btn btn-reject btn-xs" disabled={busyId === r.id} onClick={() => openCancel(r)}>
                             Cancel
                           </button>
                         </>
                       )}
                       {r.status === 'PROCEED' && canVerify && (!r.expense || isRevision(r)) && (
-                        <button className="btn btn-primary" disabled={busyId === r.id} onClick={() => openInvoices(r)}>
+                        <button className="btn btn-primary btn-xs" disabled={busyId === r.id} onClick={() => openInvoices(r)}>
                           {isRevision(r) ? 'Update Invoice' : 'Add Invoices'}
                         </button>
                       )}
@@ -441,7 +566,7 @@ export default function ExpenseRequestsPage() {
                 </tr>
               );
             })}
-            {filtered.length === 0 && (
+            {visibleRows.length === 0 && (
               <tr>
                 <td colSpan={10} style={{ color: 'var(--muted)' }}>
                   No requests
@@ -450,7 +575,7 @@ export default function ExpenseRequestsPage() {
             )}
           </tbody>
         </table>
-        {filtered.length > 0 && (
+        {visibleRows.length > 0 && (
           <Pagination
             page={pagination.page}
             totalPages={pagination.totalPages}

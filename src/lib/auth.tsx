@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from './api';
+import { markLoggedOut } from './loginRedirect';
 
 export interface CurrentUser {
   id: string;
@@ -63,6 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('user');
+    markLoggedOut();
     setUser(null);
     router.push('/login');
   };

@@ -87,7 +87,7 @@ export default function ClientPartiesPicker({
   return (
     <>
       <div className="form-row">
-        <label>{compact ? 'Agency' : 'Agency * (isi Agency atau Advertiser, bisa lebih dari 1)'}</label>
+        <label>{compact ? 'Agency' : 'Agency (wajib isi Agency atau Advertiser, boleh keduanya)'}</label>
         {!compact && <Chips items={value.agencies} onRemove={(id) => onChange({ ...value, agencies: value.agencies.filter((a) => a.id !== id) })} />}
         <AddSelect
           placeholder="Add agency..."
@@ -102,7 +102,7 @@ export default function ClientPartiesPicker({
       </div>
 
       <div className="form-row">
-        <label>{compact ? 'Advertiser' : 'Advertiser * (isi Agency atau Advertiser, bisa lebih dari 1)'}</label>
+        <label>{compact ? 'Advertiser' : 'Advertiser (wajib isi Agency atau Advertiser, boleh keduanya)'}</label>
         {!compact && (
           <Chips
             items={value.advertisers}

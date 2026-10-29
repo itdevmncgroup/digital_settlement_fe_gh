@@ -1,4 +1,4 @@
-import { NavIcon } from './NavIcons';
+import BrandLogo from './BrandLogo';
 
 // Full-screen branded loading state: shown while a session is being restored,
 // right after login, and while the first route decides where to send the user.
@@ -12,7 +12,7 @@ export default function SplashLoader({ message = 'Loading' }: { message?: string
           <span className="splash-ring" />
           <span className="splash-ring splash-ring-2" />
           <span className="splash-mark">
-            <NavIcon name="logo" />
+            <BrandLogo variant="mark" height={44} />
           </span>
         </div>
         <div className="splash-title gradient-text">Digital Settlement</div>

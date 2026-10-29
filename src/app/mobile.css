@@ -29,23 +29,6 @@
   min-width: 0;
 }
 
-.mobile-brand-mark {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  background: var(--gradient-brand);
-  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.35);
-}
-
-.mobile-brand-mark svg {
-  width: 18px;
-  height: 18px;
-}
-
 .mobile-brand-text {
   min-width: 0;
   line-height: 1.2;
@@ -664,14 +647,15 @@
   display: grid;
   place-items: center;
   color: #fff;
-  background: var(--gradient-brand);
+  background: #fff;
   box-shadow: 0 12px 30px rgba(109, 92, 246, 0.5);
   animation: splash-pulse 1.8s ease-in-out infinite;
 }
 
-.splash-mark svg {
-  width: 32px;
-  height: 32px;
+.splash-mark .brand-logo {
+  padding: 0;
+  border-radius: 0;
+  background: none;
 }
 
 .splash-ring {

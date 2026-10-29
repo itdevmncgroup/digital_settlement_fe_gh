@@ -27,6 +27,7 @@ interface DepartmentOption {
 interface UserOption {
   id: string;
   name: string;
+  employeeId?: string;
 }
 
 export default function CreditCardsPage() {
@@ -73,17 +74,36 @@ export default function CreditCardsPage() {
       .catch(() => setUserOptions([]));
   }, [form.departmentId]);
 
+  // Combobox entries: the picked Department's users, plus the card's current holder while editing
+  // if they are no longer a member (so an untouched card keeps its holder). The employee ID is only
+  // appended when two users share a name, so the typed text always maps to one user.
+  const holderUsers: UserOption[] =
+    form.userId && !userOptions.some((u) => u.id === form.userId)
+      ? [...userOptions, { id: form.userId, name: editingUserLabel || form.userId }]
+      : userOptions;
+  const holderLabel = (u: UserOption) =>
+    holderUsers.filter((x) => x.name === u.name).length > 1 && u.employeeId ? `${u.name} (${u.employeeId})` : u.name;
+  const [holderInput, setHolderInput] = useState('');
+
+  const onHolderInput = (text: string) => {
+    setHolderInput(text);
+    const match = holderUsers.find((u) => holderLabel(u).toLowerCase() === text.trim().toLowerCase());
+    setForm((f) => ({ ...f, userId: match?.id ?? '' }));
+  };
+
   const closeForm = () => {
     setShowForm(false);
     setEditingId(null);
     setForm({ bank: '', last4: '', userId: '', isActive: true, departmentId: '' });
     setEditingUserLabel('');
+    setHolderInput('');
   };
 
   const startEdit = (c: CreditCard) => {
     setEditingId(c.id);
     setForm({ bank: c.bank, last4: c.last4, userId: c.userId ?? '', isActive: c.isActive, departmentId: c.departmentId ?? '' });
     setEditingUserLabel(c.user?.name ?? '');
+    setHolderInput(c.user?.name ?? '');
     setShowForm(true);
   };
 
@@ -106,6 +126,10 @@ export default function CreditCardsPage() {
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (!form.userId) {
+      setError('Pick the card holder from the list.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -162,6 +186,7 @@ export default function CreditCardsPage() {
                 onChange={(e) => {
                   setForm({ ...form, departmentId: e.target.value, userId: '' });
                   setEditingUserLabel('');
+                  setHolderInput('');
                 }}
               >
                 <option value="">— Unassigned —</option>
@@ -174,22 +199,23 @@ export default function CreditCardsPage() {
             </div>
             <div className="form-row">
               <label>Card Holder Name</label>
-              <select
+              <input
                 required
+                list="credit-card-holders"
                 disabled={!form.departmentId}
-                value={form.userId}
-                onChange={(e) => setForm({ ...form, userId: e.target.value })}
-              >
-                <option value="">{form.departmentId ? '— Select user —' : 'Select department first'}</option>
-                {userOptions.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name}
-                  </option>
+                value={holderInput}
+                onChange={(e) => onHolderInput(e.target.value)}
+                placeholder={form.departmentId ? 'Type to search user...' : 'Select department first'}
+                autoComplete="off"
+              />
+              <datalist id="credit-card-holders">
+                {holderUsers.map((u) => (
+                  <option key={u.id} value={holderLabel(u)} />
                 ))}
-                {form.userId && !userOptions.some((u) => u.id === form.userId) && (
-                  <option value={form.userId}>{editingUserLabel || form.userId}</option>
-                )}
-              </select>
+              </datalist>
+              {form.departmentId && holderInput && !form.userId && (
+                <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>Pick a user from this department&apos;s list.</div>
+              )}
             </div>
             <div className="form-row">
               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

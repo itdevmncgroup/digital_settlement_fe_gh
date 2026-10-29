@@ -12,6 +12,7 @@ export default function AgenciesPage() {
       fields={[
         { key: 'code', label: 'Code', type: 'text', required: true },
         { key: 'name', label: 'Name', type: 'text', required: true },
+        { key: 'isActive', label: 'Active', type: 'checkbox' },
       ]}
       columns={[
         { key: 'code', label: 'Code' },
