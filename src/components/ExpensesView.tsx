@@ -368,6 +368,9 @@ function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
   const [paymentMethodOptions, setPaymentMethodOptions] = useState<PaymentMethodOption[]>([]);
   const [advertiserOptions, setAdvertiserOptions] = useState<AdvertiserOption[]>([]);
   const [agencyOptions, setAgencyOptions] = useState<AgencyOption[]>([]);
+  // New/Edit Expense form only: Agencies/Advertisers covered by the Department picked on the form.
+  const [formAdvertiserOptions, setFormAdvertiserOptions] = useState<AdvertiserOption[]>([]);
+  const [formAgencyOptions, setFormAgencyOptions] = useState<AgencyOption[]>([]);
   const [brandOptions, setBrandOptions] = useState<BrandOption[]>([]);
   const [selectedAgencies, setSelectedAgencies] = useState<AgencyOption[]>([]);
   const [selectedAdvertisers, setSelectedAdvertisers] = useState<AdvertiserOption[]>([]);
@@ -579,6 +582,19 @@ function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
     api.get<PaymentMethodOption[]>('/payment-methods?active=true').then(setPaymentMethodOptions).catch(() => undefined);
   }, []);
 
+  // Agency / Advertiser dropdowns on the form only list what the picked Department covers
+  // (Department coverage); nothing picked yet shows them all.
+  useEffect(() => {
+    // `cancelled` drops a slower, stale response (e.g. the unfiltered one fired before the Department was known).
+    let cancelled = false;
+    const qs = form.departmentId ? `&departmentIds=${form.departmentId}` : '';
+    api.get<AdvertiserOption[]>(`/advertisers?active=true${qs}`).then((r) => !cancelled && setFormAdvertiserOptions(r)).catch(() => undefined);
+    api.get<AgencyOption[]>(`/agencies?active=true${qs}`).then((r) => !cancelled && setFormAgencyOptions(r)).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [form.departmentId]);
+
   // 1 Department = 1 credit card - the Corporate Card dropdown only ever lists the card(s)
   // belonging to whichever Department is currently picked on the form.
   useEffect(() => {
@@ -765,13 +781,13 @@ function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
   };
 
   const addAgency = (agencyId: string) => {
-    const a = agencyOptions.find((x) => x.id === agencyId);
+    const a = formAgencyOptions.find((x) => x.id === agencyId);
     if (a) setSelectedAgencies((prev) => (prev.some((s) => s.id === a.id) ? prev : [...prev, a]));
   };
   const removeAgency = (agencyId: string) => setSelectedAgencies((prev) => prev.filter((a) => a.id !== agencyId));
 
   const addAdvertiser = (advertiserId: string) => {
-    const a = advertiserOptions.find((x) => x.id === advertiserId);
+    const a = formAdvertiserOptions.find((x) => x.id === advertiserId);
     if (a) setSelectedAdvertisers((prev) => (prev.some((s) => s.id === a.id) ? prev : [...prev, a]));
   };
   const removeAdvertiser = (advertiserId: string) => setSelectedAdvertisers((prev) => prev.filter((a) => a.id !== advertiserId));
@@ -1435,7 +1451,7 @@ function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
                   <div className="form-row" style={{ maxWidth: 360 }}>
                     <select value="" onChange={(e) => e.target.value && addAgency(e.target.value)}>
                       <option value="">+ Add an agency</option>
-                      {agencyOptions
+                      {formAgencyOptions
                         .filter((a) => !selectedAgencies.some((s) => s.id === a.id))
                         .map((a) => (
                           <option key={a.id} value={a.id}>
@@ -1471,7 +1487,7 @@ function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
                   <div className="form-row" style={{ maxWidth: 360 }}>
                     <select value="" onChange={(e) => e.target.value && addAdvertiser(e.target.value)}>
                       <option value="">+ Add an advertiser</option>
-                      {advertiserOptions
+                      {formAdvertiserOptions
                         .filter((a) => !selectedAdvertisers.some((s) => s.id === a.id))
                         .map((a) => (
                           <option key={a.id} value={a.id}>
@@ -1702,7 +1718,7 @@ function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
                 EDITABLE_STATUSES.includes(r.status) &&
                 (r.salesId === user?.id || canActOnBehalf || (r.status === 'PENDING_SALES_ADMIN' && hasRole('SALES_ADMIN')));
               const canDeleteDraft =
-                r.status === 'DRAFT' && hasPermission('expense_draft.delete.own') && (r.createdById ?? r.salesId) === user?.id;
+                r.status === 'DRAFT' && hasPermission('expense.draft.delete.own') && (r.createdById ?? r.salesId) === user?.id;
               const canResend = isPendingApprovalStatus(r.status) && (r.salesId === user?.id || canActOnBehalf);
               const matched = isMatched(r);
               return (

@@ -120,11 +120,10 @@ const RANGES = [
 // `href` is /m/approvals: it lists everything waiting on the user, budget-stage
 // Expense Requests included (tap one to fill in the budget).
 function usePendingApprovalCount(): { count: number; href: string } | null {
-  const { user, hasRole } = useAuth();
+  const { user } = useAuth();
   const [result, setResult] = useState<{ count: number; href: string } | null>(null);
   const userId = user?.id;
   const positionCode = user?.position?.code;
-  const isAdmin = hasRole('ADMINISTRATOR');
 
   useEffect(() => {
     if (!userId) return;
@@ -133,14 +132,14 @@ function usePendingApprovalCount(): { count: number; href: string } | null {
       api.get<ExpenseRequest[]>('/expense-requests').catch(() => [] as ExpenseRequest[]),
     ]).then(([rows, requests]) => {
       const mine = requests.filter((q) => {
-        if (q.status === 'BUDGET_INPUT') return positionCode === POSITION_SALES_CS || isAdmin;
-        if (q.status === 'CORSEC_VERIFICATION') return positionCode === POSITION_CORSEC || isAdmin;
+        if (q.status === 'BUDGET_INPUT') return positionCode === POSITION_SALES_CS;
+        if (q.status === 'CORSEC_VERIFICATION') return positionCode === POSITION_CORSEC;
         const step = currentApprovalStep(q);
-        return !!step && (step.resolvedApprover?.id === userId || isAdmin);
+        return !!step && step.resolvedApprover?.id === userId;
       });
-      setResult({ count: rows.filter((r) => r.isMyTurn || isAdmin).length + mine.length, href: '/m/approvals' });
+      setResult({ count: rows.filter((r) => r.isMyTurn).length + mine.length, href: '/m/approvals' });
     });
-  }, [userId, positionCode, isAdmin]);
+  }, [userId, positionCode]);
 
   return result;
 }

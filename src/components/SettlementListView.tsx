@@ -14,6 +14,7 @@ import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import TransactionTotalsCards, { sumByBucket, TotalsBucket } from '@/components/TransactionTotalsCards';
 import { usePrompt } from '@/components/PromptDialog';
+import { useConfirm } from '@/components/ConfirmDialog';
 import SplashLoader from '@/components/SplashLoader';
 
 interface ApprovalStepInfo {
@@ -65,7 +66,7 @@ interface SettlementRow {
   odooUnitId: string | null;
   createdAt: string;
   department: { id: string; name: string };
-  createdBy: { name: string };
+  createdBy: { id: string; name: string };
   expenses: SettlementExpenseRow[];
   // The batch's own tier (SLS_MAR_DIR -> VP -> CO_CFO) - separate from each
   // member Expense's own approvalRequest above.
@@ -169,10 +170,12 @@ function SettlementPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
   const searchParams = useSearchParams();
   const { user, hasRole, hasPermission } = useAuth();
   const toast = useToast();
-  const [resendingId, setResendingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState('');
+const [resendingId, setResendingId] = useState<string | null>(null);
   const canManage = hasRole('ADMINISTRATOR');
   const canGenerate = hasRole('SALES') || canManage || hasPermission('settlement.create.owndept');
   const prompt = usePrompt();
+  const confirm = useConfirm();
 
   const [rows, setRows] = useState<SettlementRow[]>([]);
   const [departmentOptions, setDepartmentOptions] = useState<DepartmentOption[]>([]);
@@ -331,6 +334,25 @@ function SettlementPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
 
   // DRAFT_SETTLEMENT -> APPROVAL_SLS_MAR_DIR: starts the settlement's own
   // approval chain (SettlementsService.submitDraft).
+  const deleteDraft = async (r: SettlementRow) => {
+    const ok = await confirm({
+      title: 'Delete draft settlement?',
+      message: `Draft ${r.settlementNo} will be permanently deleted and its expenses released. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setDeletingId(r.id);
+    setError('');
+    try {
+      await api.del(`/settlements/${r.id}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete draft settlement');
+    } finally {
+      setDeletingId('');
+    }
+  };
+
   const submitDraft = async (id: string) => {
     setSubmittingDraftId(id);
     setError('');
@@ -673,6 +695,11 @@ function SettlementPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
                         onClick={() => submitDraft(r.id)}
                       >
                         {submittingDraftId === r.id ? 'Submitting...' : 'Submit'}
+                      </button>
+                    )}
+                    {r.status === 'DRAFT_SETTLEMENT' && r.createdBy?.id === user?.id && hasPermission('settlement.draft.delete.own') && (
+                      <button className="btn btn-danger btn-xs" disabled={busy || deletingId === r.id} onClick={() => deleteDraft(r)} title="Delete this draft settlement">
+                        {deletingId === r.id ? 'Deleting...' : 'Delete'}
                       </button>
                     )}
                     {canGenerate && r.status.startsWith('APPROVAL_') && (

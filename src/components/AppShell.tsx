@@ -192,11 +192,11 @@ const NAV: NavGroup[] = [
     items: [
       {
         href: '/approvals',
-        label: 'Approval',
+        label: 'APPROVAL',
         icon: 'approval',
         hideIconWhenExpanded: true,
         roles: ['ADMINISTRATOR', 'MANAGEMENT'],
-        permissions: ['expense.approve.all', 'expense.approve.owndept'],
+        permissions: ['expense.approve.all', 'expense.approve.owndept', 'approval.read.own'],
       },
     ],
   },
@@ -242,6 +242,7 @@ const NAV: NavGroup[] = [
     section: 'System',
     items: [
       { href: '/approval-levels', label: 'Approval Level', icon: 'approval-level', roles: ['ADMINISTRATOR'] },
+      { href: '/approval-trail', label: 'Approval Trail', icon: 'approval', roles: ['ADMINISTRATOR'] },
       { href: '/rollback', label: 'Rollback', icon: 'rollback', roles: ['ADMINISTRATOR'] },
     ],
   },

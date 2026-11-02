@@ -62,7 +62,7 @@ function MobileExpensesList() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const canDeleteDraft = (r: ExpenseRow) =>
-    r.status === 'DRAFT' && hasPermission('webmobile.expense_draft.delete.own') && (r.createdById ?? r.salesId) === user?.id;
+    r.status === 'DRAFT' && hasPermission('webmobile.expense.draft.delete.own') && (r.createdById ?? r.salesId) === user?.id;
 
   const deleteDraft = async (r: ExpenseRow) => {
     const ok = await confirm({

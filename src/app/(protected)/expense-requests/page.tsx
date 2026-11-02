@@ -15,6 +15,7 @@ import Pagination from '@/components/Pagination';
 import FlowerBouquetTabs from '@/components/FlowerBouquetTabs';
 import TransactionTotalsCards, { sumByBucket, TotalsBucket } from '@/components/TransactionTotalsCards';
 import { usePrompt } from '@/components/PromptDialog';
+import { useConfirm } from '@/components/ConfirmDialog';
 import { usePagination } from '@/lib/usePagination';
 
 interface ApprovalStep {
@@ -30,6 +31,7 @@ interface ExpenseRequestRow {
   id: string;
   requestNo: string;
   requestedBy: { id: string; name: string; unitId?: string | null };
+  createdBy?: { id: string; name: string } | null;
   department: { id: string; name: string } | null;
   activityType: Option;
   clientName: string | null;
@@ -105,6 +107,7 @@ function formatCurrency(value: string | number) {
 export default function ExpenseRequestsPage() {
   const { user, hasRole, hasPermission } = useAuth();
   const prompt = usePrompt();
+  const confirm = useConfirm();
   const isAdmin = hasRole('ADMINISTRATOR');
   const canCreate = hasRole('SALES_ADMIN') || isAdmin || hasPermission('request.expense.create.owndept');
   const canFillBudget = user?.position?.code === POSITION_SALES_CS || isAdmin;
@@ -295,6 +298,19 @@ export default function ExpenseRequestsPage() {
     } finally {
       setBusyId(null);
     }
+  };
+
+  const canDeleteDraft = (r: ExpenseRequestRow) =>
+    r.status === 'DRAFT' && hasPermission('request.expense.draft.delete.own') && (r.createdBy?.id ?? r.requestedBy.id) === user?.id;
+
+  const deleteDraft = async (r: ExpenseRequestRow) => {
+    const ok = await confirm({
+      title: 'Delete draft?',
+      message: `Draft ${r.requestNo} will be permanently deleted. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    await runAction(r.id, () => api.del(`/expense-requests/${r.id}`), 'Failed to delete draft');
   };
 
   const approve = (r: ExpenseRequestRow) =>
@@ -531,6 +547,11 @@ export default function ExpenseRequestsPage() {
                   </td>
                   <td>
                     <div className="row-actions">
+                      {canDeleteDraft(r) && (
+                        <button className="btn btn-danger btn-xs" disabled={busyId === r.id} onClick={() => deleteDraft(r)} title="Delete this draft">
+                          {busyId === r.id ? 'Deleting...' : 'Delete'}
+                        </button>
+                      )}
                       {canActOnApproval(r) && (
                         <>
                           <button className="btn btn-approve btn-xs" disabled={busyId === r.id} onClick={() => approve(r)}>
@@ -630,7 +651,13 @@ export default function ExpenseRequestsPage() {
               <div className="form-section-title">Client</div>
               {/* Agency / Advertiser / Brand are three .form-row siblings - one column each. */}
               <div className="form-cols-3">
-                <ClientPartiesPicker value={parties} onChange={setParties} style={{ width: '100%' }} compact />
+                <ClientPartiesPicker
+                  value={parties}
+                  onChange={setParties}
+                  style={{ width: '100%' }}
+                  compact
+                  departmentIds={form.departmentId ? [form.departmentId] : departments.map((d) => d.id)}
+                />
               </div>
               <div className="form-hint" style={partiesMissing ? { color: 'var(--danger, #d63939)' } : undefined}>
                 Wajib isi salah satu: Agency atau Advertiser (bisa lebih dari 1). Brand opsional - Advertiser boleh tanpa Brand.

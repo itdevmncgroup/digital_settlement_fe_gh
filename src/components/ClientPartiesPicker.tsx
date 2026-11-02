@@ -57,20 +57,30 @@ export default function ClientPartiesPicker({
   onChange,
   style,
   compact,
+  departmentIds,
 }: {
   value: ClientParties;
   onChange: (v: ClientParties) => void;
   style: React.CSSProperties;
   compact?: boolean;
+  // Agency / Advertiser options are limited to what these Departments cover; empty/undefined = all.
+  departmentIds?: string[];
 }) {
   const [agencies, setAgencies] = useState<PartyOption[]>([]);
   const [advertisers, setAdvertisers] = useState<PartyOption[]>([]);
   const [brands, setBrands] = useState<BrandPartyOption[]>([]);
 
+  const departmentKey = departmentIds?.join(',') ?? '';
   useEffect(() => {
-    api.get<PartyOption[]>('/agencies?active=true').then(setAgencies).catch(() => undefined);
-    api.get<PartyOption[]>('/advertisers?active=true').then(setAdvertisers).catch(() => undefined);
-  }, []);
+    // `cancelled` drops a slower, stale response (e.g. the unfiltered one fired before the Department was known).
+    let cancelled = false;
+    const qs = departmentKey ? `&departmentIds=${departmentKey}` : '';
+    api.get<PartyOption[]>(`/agencies?active=true${qs}`).then((r) => !cancelled && setAgencies(r)).catch(() => undefined);
+    api.get<PartyOption[]>(`/advertisers?active=true${qs}`).then((r) => !cancelled && setAdvertisers(r)).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [departmentKey]);
 
   const advertiserIds = value.advertisers.map((a) => a.id).join(',');
   useEffect(() => {

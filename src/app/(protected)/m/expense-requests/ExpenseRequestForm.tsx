@@ -194,7 +194,12 @@ export default function ExpenseRequestForm({ request }: { request?: ExpenseReque
           </div>
         )}
 
-        <ClientPartiesPicker value={parties} onChange={setParties} style={field} />
+        <ClientPartiesPicker
+          value={parties}
+          onChange={setParties}
+          style={field}
+          departmentIds={departmentId ? [departmentId] : departments.map((d) => d.id)}
+        />
 
         <div className="form-row">
           <label>Budget (IDR)</label>

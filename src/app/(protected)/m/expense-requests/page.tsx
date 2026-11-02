@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import WebMobileGate from '@/components/WebMobileGate';
+import { useConfirm } from '@/components/ConfirmDialog';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/date';
 import {
@@ -29,11 +30,13 @@ export default function MobileExpenseRequestsPage() {
 
 function MobileExpenseRequestsList() {
   const { user, hasRole, hasPermission } = useAuth();
+  const confirm = useConfirm();
   const [rows, setRows] = useState<ExpenseRequest[] | null>(null);
   const [departmentIds, setDepartmentIds] = useState<Set<string> | null>(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -54,6 +57,28 @@ function MobileExpenseRequestsList() {
       ? (!!r.department && !!departmentIds?.has(r.department.id)) ||
         !!r.approvalRequest?.steps.some((s) => s.resolvedApprover?.id === user?.id)
       : r.requestedBy?.id === user?.id || r.createdBy?.id === user?.id);
+
+  const canDeleteDraft = (r: ExpenseRequest) =>
+    r.status === 'DRAFT' && hasPermission('webmobile.request.expense.draft.delete.own') && (r.createdBy?.id ?? r.requestedBy?.id) === user?.id;
+
+  const deleteDraft = async (r: ExpenseRequest) => {
+    const ok = await confirm({
+      title: 'Delete draft?',
+      message: `Draft ${r.requestNo} will be permanently deleted. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setDeletingId(r.id);
+    setError('');
+    try {
+      await api.del(`/expense-requests/${r.id}`);
+      setRows((prev) => (prev ? prev.filter((x) => x.id !== r.id) : prev));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete draft');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const q = search.trim().toLowerCase();
   const shown = (rows ?? [])
@@ -115,6 +140,21 @@ function MobileExpenseRequestsList() {
                 {step && <span>Waiting: {step.position.name}</span>}
                 {myTurn && <span style={{ marginLeft: 'auto', color: 'var(--warning)' }}>Needs your approval ›</span>}
               </div>
+              {canDeleteDraft(r) && (
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={deletingId === r.id}
+                  style={{ marginTop: 8 }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deleteDraft(r);
+                  }}
+                >
+                  {deletingId === r.id ? 'Deleting...' : 'Delete'}
+                </button>
+              )}
             </Link>
           );
         })}

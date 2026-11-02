@@ -3,9 +3,9 @@
     "relation": ["delegate_permission/common.handle_all_urls"],
     "target": {
       "namespace": "android_app",
-      "package_name": "com.mncgroup.digital_settlement",
+      "package_name": "com.mncgroup.digital_settlement_webview",
       "sha256_cert_fingerprints": [
-        "TODO: run `keytool -list -v -keystore <release-keystore> -alias <alias>` (or `./gradlew signingReport` from android/) and paste the release-signing SHA256 fingerprint here"
+        "4C:F8:41:A9:72:CC:1B:CF:77:DF:AD:37:27:1F:54:6A:65:D1:6C:43:22:62:59:C8:67:36:65:AF:DB:60:7E:91"
       ]
     }
   }

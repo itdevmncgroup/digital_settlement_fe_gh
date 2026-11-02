@@ -3,8 +3,9 @@
 import { useEffect, useRef } from 'react';
 import 'leaflet/dist/leaflet.css';
 
-// Map (OpenStreetMap tiles) to fine-tune a "lat, lng" location: tap the map or
-// drag the pin. `value` is the same "lat, lng" string stored on Expense.location.
+// Map (OpenStreetMap tiles) showing a "lat, lng" location. With `onChange` the user can tap the map or
+// drag the pin to adjust it; without it the map is display-only (the pin follows `value`).
+// `value` is the same "lat, lng" string stored on Expense.location.
 // Leaflet touches `window`, so it's imported inside the effect (client only).
 
 const DEFAULT_CENTER: [number, number] = [-6.2088, 106.8456]; // Jakarta
@@ -17,7 +18,7 @@ export function parseLatLng(value: string): [number, number] | null {
   return Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? [lat, lng] : null;
 }
 
-export default function LocationPicker({ value, onChange, height = 260 }: { value: string; onChange: (v: string) => void; height?: number }) {
+export default function LocationPicker({ value, onChange, height = 260 }: { value: string; onChange?: (v: string) => void; height?: number }) {
   const el = useRef<HTMLDivElement>(null);
   const api = useRef<{ setPoint: (p: [number, number]) => void } | null>(null);
   const onChangeRef = useRef(onChange);
@@ -50,14 +51,16 @@ export default function LocationPicker({ value, onChange, height = 260 }: { valu
           marker.setLatLng(p);
           return;
         }
-        marker = L.marker(p, { icon, draggable: true }).addTo(map);
-        marker.on('dragend', () => onChangeRef.current(fmt(marker!.getLatLng())));
+        marker = L.marker(p, { icon, draggable: !!onChangeRef.current }).addTo(map);
+        marker.on('dragend', () => onChangeRef.current?.(fmt(marker!.getLatLng())));
       };
       if (start) place(start);
-      map.on('click', (e) => {
-        place([e.latlng.lat, e.latlng.lng]);
-        onChangeRef.current(fmt(e.latlng));
-      });
+      if (onChangeRef.current) {
+        map.on('click', (e) => {
+          place([e.latlng.lat, e.latlng.lng]);
+          onChangeRef.current?.(fmt(e.latlng));
+        });
+      }
       api.current = {
         setPoint: (p) => {
           place(p);

@@ -101,14 +101,9 @@ export default function MobileApprovalsPage() {
 }
 
 function MobileApprovalsList() {
-  const { user, hasRole, hasPermission } = useAuth();
-  // webmobile.approval.read.own: only what waits on this user right now. .read.owndept also lists
-  // what waits on other approvers of the user's Department(s) - read-only, the Approve/Reject
-  // buttons stay with the step's resolved approver (or ADMIN).
-  const seeDept = hasRole('ADMINISTRATOR') || hasPermission('webmobile.approval.read.owndept');
+  const { user } = useAuth();
   const [rows, setRows] = useState<PendingApproval[] | null>(null);
   const [requests, setRequests] = useState<ExpenseRequestRow[]>([]);
-  const [departmentIds, setDepartmentIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
   const [rejecting, setRejecting] = useState<PendingApproval | null>(null);
@@ -155,19 +150,10 @@ function MobileApprovalsList() {
   const load = () => {
     api
       .get<PendingApproval[]>('/approvals/pending')
-      // The API also returns look-ahead rows (later steps, read-scope) - without
-      // webmobile.approval.read.owndept only what needs this user's approval right now
-      // belongs here, matching the dashboard count. Even with it, a document whose
-      // approver chain does not include this user is not theirs to approve - hidden.
-      .then((all) => setRows(all.filter((r) => r.isMyTurn || (seeDept && isInChain(r.steps)))))
+      // The API also returns look-ahead rows (later steps, read-scope) - only what needs
+      // this user's own approval right now belongs here.
+      .then((all) => setRows(all.filter((r) => r.isMyTurn)))
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load'));
-    if (seeDept) {
-      // Best-effort: only used to pick the Expense Requests of the user's own Department(s).
-      api
-        .get<{ id: string }[]>('/departments/me')
-        .then((ds) => setDepartmentIds(new Set(ds.map((d) => d.id))))
-        .catch(() => undefined);
-    }
     // Best-effort: a failure here must not hide the main approval list. Filtered
     // to what needs this user at render time (user may not be loaded yet here).
     api
@@ -177,32 +163,20 @@ function MobileApprovalsList() {
   };
   useEffect(load, []);
 
-  const isAdmin = hasRole('ADMINISTRATOR');
   const requestStep = (r: ExpenseRequestRow) => {
     const ar = r.approvalRequest;
     if (r.status !== 'PENDING_APPROVAL' || !ar || ar.status !== 'PENDING') return undefined;
     return ar.steps.find((s) => s.stepOrder === ar.currentStep);
   };
-  // Approval step is the user's (or ADMIN), the budget stage and the user is Sales Customer Service (or ADMIN),
-  // or the Corsec verification stage and the user is Corsec (or ADMIN).
+  // Approval step is the user's, the budget stage and the user is Sales Customer Service,
+  // or the Corsec verification stage and the user is Corsec.
   const needsMyAction = (r: ExpenseRequestRow) => {
-    if (r.status === 'BUDGET_INPUT') return user?.position?.code === POSITION_SALES_CS || isAdmin;
-    if (r.status === 'CORSEC_VERIFICATION') return user?.position?.code === POSITION_CORSEC || isAdmin;
+    if (r.status === 'BUDGET_INPUT') return user?.position?.code === POSITION_SALES_CS;
+    if (r.status === 'CORSEC_VERIFICATION') return user?.position?.code === POSITION_CORSEC;
     const step = requestStep(r);
-    return !!step && (step.resolvedApprover?.id === user?.id || isAdmin);
+    return !!step && step.resolvedApprover?.id === user?.id;
   };
-  // Whether this user holds (or, as ADMIN, may act on) any tier of the document's approver chain.
-  const isInChain = (steps: StepInfo[]) => isAdmin || steps.some((s) => s.resolvedApprover?.id === user?.id);
-  // Expense Request: its Sales CS (budget) and Corsec (verify) stages are Position-gated, not part of `steps`.
-  const isRequestApprover = (r: ExpenseRequestRow) =>
-    isInChain(r.approvalRequest?.steps ?? []) || user?.position?.code === POSITION_SALES_CS || user?.position?.code === POSITION_CORSEC;
-  const waitingInMyDept = (r: ExpenseRequestRow) =>
-    seeDept &&
-    isRequestApprover(r) &&
-    !!r.department &&
-    departmentIds.has(r.department.id) &&
-    (r.status === 'PENDING_APPROVAL' || r.status === 'BUDGET_INPUT' || r.status === 'CORSEC_VERIFICATION');
-  const myRequests = requests.filter((r) => needsMyAction(r) || waitingInMyDept(r));
+  const myRequests = requests.filter(needsMyAction);
 
   const postRequestAction = (r: ExpenseRequestRow, action: RequestAction, body?: { reason: string }) =>
     action === 'approve' || action === 'reject'
@@ -251,8 +225,8 @@ function MobileApprovalsList() {
     }
   };
 
-  // Same rule as the desktop inbox: only the step's resolved approver (or ADMIN) gets buttons.
-  const canActOn = (step: StepInfo | undefined) => !!step && (step.resolvedApprover?.id === user?.id || hasRole('ADMINISTRATOR'));
+  // Only the step's resolved approver gets buttons.
+  const canActOn = (step: StepInfo | undefined) => !!step && step.resolvedApprover?.id === user?.id;
 
   // Bulk selection is Expense-only, same restriction as the desktop inbox and
   // the mobile app (ApprovalsListScreen._selectable) - Pre-Event/Settlement

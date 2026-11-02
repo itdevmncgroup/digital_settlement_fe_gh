@@ -370,8 +370,6 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         if (!isEdit && entertainment.length === 1) setForm((f) => ({ ...f, activityTypeId: f.activityTypeId || entertainment[0].id }));
       })
       .catch(() => undefined);
-    api.get<Option[]>('/agencies?active=true').then(setAgencies).catch(() => undefined);
-    api.get<Option[]>('/advertisers?active=true').then(setAdvertisers).catch(() => undefined);
     api.get<PaymentMethodOption[]>('/payment-methods?active=true').then(setPaymentMethods).catch(() => undefined);
     if (canPickRequestor) {
       api.get<typeof requestors>('/expenses/requestors').then(setRequestors).catch(() => undefined);
@@ -496,17 +494,17 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   const toggleBrand = (b: BrandOption) =>
     setSelBrands((p) => (p.some((s) => s.id === b.id) ? p.filter((s) => s.id !== b.id) : [...p, b]));
 
-  // Current position: tried automatically once on open (never overwriting what
-  // the user already typed), and again on demand via the pin button. High
-  // accuracy first (GPS), then a coarse network fix if that times out or is
-  // unavailable. Status is shown under the field instead of failing silently.
+  // Location is read-only: it only ever comes from the device's GPS. Detected automatically once on
+  // open (a saved Expense keeps the position it already has), and again on demand via the pin button.
+  // High accuracy first (GPS), then a coarse network fix if that times out or is unavailable.
+  // Status is shown under the field instead of failing silently.
   const detectLocation = (auto: boolean) => {
     if (!window.isSecureContext) {
-      setLocStatus({ tone: 'error', text: 'Location needs a secure (HTTPS) connection - type the address or tap the map.' });
+      setLocStatus({ tone: 'error', text: 'Location needs a secure (HTTPS) connection.' });
       return;
     }
     if (!navigator.geolocation) {
-      setLocStatus({ tone: 'error', text: 'This browser cannot detect location - tap the map instead.' });
+      setLocStatus({ tone: 'error', text: 'This browser cannot detect location.' });
       return;
     }
     setLocating(true);
@@ -514,7 +512,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
     const onOk = (pos: GeolocationPosition) => {
       const value = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
       setForm((f) => (auto && f.location ? f : { ...f, location: value }));
-      setLocStatus({ tone: 'ok', text: `Location detected (accuracy about ${Math.round(pos.coords.accuracy)} m). Tap the map or drag the pin to adjust.` });
+      setLocStatus({ tone: 'ok', text: `Location detected from GPS (accuracy about ${Math.round(pos.coords.accuracy)} m).` });
       setLocating(false);
     };
     const onFail = (err: GeolocationPositionError) => {
@@ -522,8 +520,8 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
         tone: 'error',
         text:
           err.code === err.PERMISSION_DENIED
-            ? 'Location permission is blocked - allow it in the browser/site settings, then tap the pin.'
-            : 'Could not get your location - tap the pin to retry, or tap the map.',
+            ? 'Location permission is blocked - allow it in the browser/site settings and turn GPS on, then tap the pin.'
+            : 'Could not get your location - turn GPS on and tap the pin to retry.',
       });
       setLocating(false);
     };
@@ -552,6 +550,18 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
       return;
     }
     api.get<CreditCardOption[]>(`/credit-cards?departmentId=${form.departmentId}&active=true`).then(setCards).catch(() => undefined);
+  }, [form.departmentId]);
+
+  // Agency / Advertiser options are what the picked Department covers; nothing picked yet shows them all.
+  useEffect(() => {
+    // `cancelled` drops a slower, stale response (e.g. the unfiltered one fired before the Department was known).
+    let cancelled = false;
+    const qs = form.departmentId ? `&departmentIds=${form.departmentId}` : '';
+    api.get<Option[]>(`/agencies?active=true${qs}`).then((r) => !cancelled && setAgencies(r)).catch(() => undefined);
+    api.get<Option[]>(`/advertisers?active=true${qs}`).then((r) => !cancelled && setAdvertisers(r)).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [form.departmentId]);
 
   const paymentCode = paymentMethods.find((m) => m.id === form.paymentMethodId)?.code;
@@ -1047,7 +1057,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
           ) : (
             <>
               <div style={{ display: 'flex', gap: 8 }}>
-                <input value={form.location} onChange={(e) => set({ location: e.target.value })} style={{ ...field, flex: 1 }} placeholder="Address or coordinates" />
+                <input value={form.location} readOnly style={{ ...field, flex: 1 }} placeholder={locating ? 'Detecting location...' : 'Detected from GPS'} />
                 <button type="button" className="btn" style={{ minHeight: 44, minWidth: 48 }} disabled={locating} onClick={() => detectLocation(false)} aria-label="Use my location">
                   {locating ? '...' : '📍'}
                 </button>
@@ -1062,7 +1072,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
               >
                 {locStatus.text}
               </div>
-              <LocationPicker value={form.location} onChange={(v) => set({ location: v })} />
+              <LocationPicker value={form.location} />
             </>
           )}
         </div>

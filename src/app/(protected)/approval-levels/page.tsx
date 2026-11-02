@@ -6,6 +6,7 @@ import NumberInput from '@/components/NumberInput';
 import { usePagination } from '@/lib/usePagination';
 import Pagination from '@/components/Pagination';
 import SearchBox from '@/components/SearchBox';
+import { useConfirm } from '@/components/ConfirmDialog';
 
 interface Option {
   id: string;
@@ -73,6 +74,7 @@ function formatCurrency(value: string | number | null) {
 // resolved to a concrete user (Department -> that Department's Approvers,
 // Any -> any active holder).
 export default function ApprovalLevelsPage() {
+  const confirm = useConfirm();
   const [levels, setLevels] = useState<ApprovalLevel[]>([]);
   const [positions, setPositions] = useState<Option[]>([]);
   const [departments, setDepartments] = useState<Option[]>([]);
@@ -224,6 +226,25 @@ export default function ApprovalLevelsPage() {
 
   const removeStep = (index: number) => {
     setForm((f) => ({ ...f, stepPositionIds: f.stepPositionIds.filter((_, i) => i !== index) }));
+  };
+
+  // The API refuses (409) while a running Expense / Expense Request / Settlement still uses the Level, or when only
+  // finished history references it (then it can only be deactivated) - the message is shown as-is.
+  const onDelete = async (l: ApprovalLevel) => {
+    const ok = await confirm({
+      title: 'Delete Approval Level?',
+      message: `"${l.name}" will be permanently deleted. This cannot be undone.`,
+      danger: true,
+    });
+    if (!ok) return;
+    setError('');
+    try {
+      await api.del(`/approval-levels/${l.id}`);
+      if (editingId === l.id) closeForm();
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Delete failed');
+    }
   };
 
   const onSubmit = async (e: FormEvent) => {
@@ -575,9 +596,14 @@ export default function ApprovalLevelsPage() {
                 <td>{[...l.steps].sort((a, b) => a.stepOrder - b.stepOrder).map((s) => s.position.name).join(' → ')}</td>
                 <td>{l.isActive ? 'Yes' : 'No'}</td>
                 <td>
-                  <button className="btn" onClick={() => startEdit(l)}>
-                    Edit
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn" onClick={() => startEdit(l)}>
+                      Edit
+                    </button>
+                    <button className="btn btn-danger" onClick={() => onDelete(l)}>
+                      Delete
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
