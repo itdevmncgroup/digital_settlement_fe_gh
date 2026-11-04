@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { api, ApiError, uploadFiles } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/date';
@@ -67,6 +68,12 @@ const ALLOWED_ACTIVITY_TYPES = ['Flower Bouquet'];
 // /expenses/from-request/:id) instead of adding one.
 const isRevision = (r: ExpenseRequestRow) => r.expense?.status === 'REVISION';
 const DEFAULT_MERCHANT = 'KELOPAQ';
+
+// "Open Expense" on a Request that already has its Expense: still with the Sales Admin (not yet submitted into the
+// approval chain) -> opens in edit mode, anything later -> read-only.
+const UNSUBMITTED_EXPENSE_STATUSES = ['DRAFT', 'PENDING_SALES_ADMIN'];
+const expenseHref = (expense: { id: string; status: string }) =>
+  `/expenses/${expense.id}?mode=${UNSUBMITTED_EXPENSE_STATUSES.includes(expense.status) ? 'edit' : 'view'}`;
 
 // Position codes of the two post-approval teams (see BE seed).
 const POSITION_SALES_CS = 'SLS-CS';
@@ -576,6 +583,11 @@ export default function ExpenseRequestsPage() {
                             Cancel
                           </button>
                         </>
+                      )}
+                      {r.expense && (
+                        <Link href={expenseHref(r.expense)} className="btn btn-xs" title={`Open Expense ${r.expense.expenseNo}`}>
+                          Open Expense
+                        </Link>
                       )}
                       {r.status === 'PROCEED' && canVerify && (!r.expense || isRevision(r)) && (
                         <button className="btn btn-primary btn-xs" disabled={busyId === r.id} onClick={() => openInvoices(r)}>

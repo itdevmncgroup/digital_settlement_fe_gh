@@ -333,6 +333,28 @@ h1, h2, h3 {
   overflow: hidden;
 }
 
+/* A top-level link shown in place of a section header (Approval): same font as .group-label. */
+.sidebar nav a.nav-as-group-label {
+  padding: 14px 10px 6px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--sidebar-group-label);
+  background: none;
+  border-radius: 0;
+}
+
+.sidebar nav a.nav-as-group-label:hover,
+.sidebar nav a.nav-as-group-label.active {
+  background: none;
+  color: var(--sidebar-active-text);
+}
+
+.sidebar nav a.nav-as-group-label.active::before {
+  display: none;
+}
+
 .sidebar .group-toggle {
   display: flex;
   align-items: center;

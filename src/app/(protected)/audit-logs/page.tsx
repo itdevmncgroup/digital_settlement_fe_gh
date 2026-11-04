@@ -13,7 +13,34 @@ interface AuditLog {
   objectType: string;
   objectId: string | null;
   timestamp: string;
+  oldValue: Record<string, unknown> | null;
+  newValue: Record<string, unknown> | null;
   user?: { name: string } | null;
+}
+
+const show = (v: unknown) => (v === null || v === undefined || v === '' ? '-' : Array.isArray(v) ? v.join('; ') || '-' : String(v));
+
+// An Expense UPDATE row stores only the fields that changed (plus expenseNo / status): "field: old -> new" per line.
+function Changes({ log }: { log: AuditLog }) {
+  const next = log.newValue;
+  if (log.action !== 'UPDATE' || !next || typeof next !== 'object') return <span style={{ color: 'var(--muted)' }}>-</span>;
+  const keys = Object.keys(next).filter((k) => k !== 'expenseNo' && k !== 'status' && k in (log.oldValue ?? {}));
+  return (
+    <div style={{ fontSize: 11 }}>
+      {typeof next.expenseNo === 'string' && (
+        <div style={{ color: 'var(--muted)' }}>
+          {next.expenseNo} · status {show(log.oldValue?.status)}
+        </div>
+      )}
+      {keys.length === 0 && !('invoiceUpdated' in next) && <div style={{ color: 'var(--muted)' }}>No field changed</div>}
+      {'invoiceUpdated' in next && <div>Invoice updated</div>}
+      {keys.map((k) => (
+        <div key={k}>
+          <strong>{k}</strong>: {show(log.oldValue?.[k])} → {show(next[k])}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function AuditLogsPage() {
@@ -57,6 +84,7 @@ export default function AuditLogsPage() {
               <th>Action</th>
               <th>Object</th>
               <th>Object ID</th>
+              <th>Changes</th>
             </tr>
           </thead>
           <tbody>
@@ -69,11 +97,14 @@ export default function AuditLogsPage() {
                 </td>
                 <td>{l.objectType}</td>
                 <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{l.objectId}</td>
+                <td>
+                  <Changes log={l} />
+                </td>
               </tr>
             ))}
             {filteredLogs.length === 0 && (
               <tr>
-                <td colSpan={5} style={{ color: 'var(--muted)' }}>No data</td>
+                <td colSpan={6} style={{ color: 'var(--muted)' }}>No data</td>
               </tr>
             )}
           </tbody>

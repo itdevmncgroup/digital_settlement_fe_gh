@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { api, ApiError, uploadFile } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useToast } from '@/components/ToastProvider';
+import { useAlert } from '@/components/ConfirmDialog';
 import NumberInput from '@/components/NumberInput';
 import LocationPicker from '@/components/LocationPicker';
 import FileThumb from '@/components/FileThumb';
@@ -281,6 +282,7 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   const router = useRouter();
   const { user, hasRole, hasPermission } = useAuth();
   const toast = useToast();
+  const alert = useAlert();
 
   // expense.create.all / .owndept (or the Web Mobile webmobile.expense.create.owndept, or Admin): key the
   // Expense in on another user's behalf - the requestor stays that user. Anyone who can't create their
@@ -621,7 +623,11 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
           : 'Invoice scanned but no total was found - enter the amount manually.',
       );
     } catch (err) {
-      if (ocrFile.current === file) setNotice(err instanceof ApiError ? `Scan failed: ${err.message}` : 'Scan failed - enter the details manually.');
+      if (ocrFile.current === file) {
+        const message = err instanceof ApiError ? err.message : 'Scan failed - enter the details manually.';
+        setNotice(`Scan failed: ${message}`);
+        void alert({ title: 'OCR scan failed', message: `${message} You can enter the invoice details manually.` });
+      }
     } finally {
       if (ocrFile.current === file || ocrFile.current === null) setScanning(false);
     }
@@ -663,6 +669,15 @@ export default function ExpenseForm({ expenseId }: { expenseId?: string }) {
   // submit endpoint. Once it's no longer DRAFT there's a single "Save
   // Changes" button (isDraft is passed as true, i.e. "don't touch approval").
   const save = async (isDraft: boolean) => {
+    // Mobile mode: the device location must be on (drafts included) - a read-only, non-DRAFT Expense has no location to detect.
+    if (!(isEdit && expenseStatus !== null && expenseStatus !== 'DRAFT') && locStatus.tone !== 'ok') {
+      toast.warning(
+        locStatus.tone === 'info'
+          ? 'Still detecting your location - wait a moment, then try again.'
+          : 'Location must be turned on. Allow location access and turn GPS on, then tap the pin to retry.',
+      );
+      return;
+    }
     // A draft can stay incomplete (even just a scanned/uploaded invoice, the rest filled in
     // later) - everything below is required as soon as it's actually submitted into the
     // approval chain, mirroring the API's checks.

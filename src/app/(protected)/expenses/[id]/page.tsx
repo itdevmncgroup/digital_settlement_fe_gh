@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError, uploadFile } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDate, formatDateTime } from '@/lib/date';
@@ -11,8 +11,10 @@ import FileThumb from '@/components/FileThumb';
 import FileOrCameraInput from '@/components/FileOrCameraInput';
 import LocalFileThumb from '@/components/LocalFileThumb';
 import Modal from '@/components/Modal';
+import { useAlert } from '@/components/ConfirmDialog';
 import { usePrompt } from '@/components/PromptDialog';
 import SplashLoader from '@/components/SplashLoader';
+import { isExpenseEditable } from '@/lib/expenseEdit';
 import { MATCH_FIRST_MESSAGE, mustMatchBeforeApprove } from '@/lib/expenseApproval';
 
 interface InvoiceFile {
@@ -183,10 +185,7 @@ interface EditItemRow {
   categoryId: string;
 }
 
-// Per product decision, an expense may be edited at any status except these
-// three terminal/locked ones (APPROVED, REJECTED, SETTLED) - everything else,
-// including in-flight OCR/matching/approval statuses, remains editable.
-const LOCKED_STATUSES = ['APPROVED', 'REJECTED', 'SETTLED'];
+// Editable only in the statuses of lib/expenseEdit.ts - once the requestor submits it, it is read-only until READY_TO_MATCHING.
 
 
 function formatCurrency(value: string | number | null) {
@@ -197,8 +196,12 @@ function formatCurrency(value: string | number | null) {
 export default function ExpenseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  // ?mode=edit opens the Edit form straight away, ?mode=view hides every edit control (the Request list's "Open Expense").
+  const pageMode = useSearchParams().get('mode');
+  const readOnlyMode = pageMode === 'view';
   const { user, hasRole, hasPermission } = useAuth();
   const prompt = usePrompt();
+  const alert = useAlert();
 
   const [expense, setExpense] = useState<Expense | null>(null);
   const [approval, setApproval] = useState<ApprovalDetail | null>(null);
@@ -308,7 +311,8 @@ export default function ExpenseDetailPage() {
   const canEditFields =
     !!expense &&
     (isOwnerOrBackOffice || completesPendingSalesAdmin || hasPermission('expense.edit.all', 'expense.edit.owndept')) &&
-    !LOCKED_STATUSES.includes(expense.status);
+    isExpenseEditable(expense.status) &&
+    !readOnlyMode;
   // A Request-linked expense (Flower Bouquet) still waiting on its Sales Admin has no
   // approval chain yet, but its Level starts at the Sales Admin tier itself - so the
   // Sales Admin acts on it directly (Approve / Revise / Reject) rather than "submitting"
@@ -327,7 +331,8 @@ export default function ExpenseDetailPage() {
       completesPendingSalesAdmin ||
       hasPermission('expense.edit.all', 'expense.edit.owndept') ||
       (isOwner && hasPermission('expense.edit.own'))) &&
-    !LOCKED_STATUSES.includes(expense.status);
+    isExpenseEditable(expense.status) &&
+    !readOnlyMode;
   const currentStepInfo = approval && approval.status === 'PENDING' ? approval.steps.find((s) => s.stepOrder === approval.currentStep) : null;
   // Only the step's actual resolvedApprover (or an ADMIN override) sees the
   // Approve/Revise buttons here - deliberately not surfaced for an
@@ -383,6 +388,15 @@ export default function ExpenseDetailPage() {
     );
     setEditingFields(true);
   };
+
+  // ?mode=edit: open the Edit form once, as soon as the expense has loaded and the user may edit it.
+  const autoEditedRef = useRef(false);
+  useEffect(() => {
+    if (pageMode !== 'edit' || autoEditedRef.current || !expense || !canEditFields) return;
+    autoEditedRef.current = true;
+    startEditFields();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageMode, expense, canEditFields]);
 
   const addEditItem = () => setEditItems((prev) => [...prev, { description: '', amount: '', categoryId: '' }]);
   const updateEditItem = (i: number, patch: Partial<EditItemRow>) =>
@@ -627,8 +641,13 @@ export default function ExpenseDetailPage() {
           setEditForm((f) => (f.expenseDate === original ? { ...f, expenseDate: result.invoiceDate as string } : f));
           setInvoiceScanNote(`Invoice date ${formatDate(result.invoiceDate)} set in Edit Expense - review and Save.`);
           break;
-        } catch {
-          // OCR is best-effort: the invoice still uploads normally.
+        } catch (err) {
+          // OCR is best-effort: the invoice still uploads normally - but tell the user the scan failed, once.
+          void alert({
+            title: 'OCR scan failed',
+            message: `${err instanceof ApiError ? err.message : `OCR scan failed for ${file.name}.`} The invoice will still upload; set the Expense Date by hand if needed.`,
+          });
+          break;
         }
       }
     } finally {

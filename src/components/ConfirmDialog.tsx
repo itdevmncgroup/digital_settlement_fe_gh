@@ -9,9 +9,12 @@ export interface ConfirmOptions {
   cancelLabel?: string;
   /** Styles the confirm button/icon as a destructive action (delete/reject/...). */
   danger?: boolean;
+  /** Notice-only dialog: a single OK button, no Cancel (see useAlert). */
+  hideCancel?: boolean;
 }
 
 type ConfirmFn = (options: ConfirmOptions) => Promise<boolean>;
+type AlertFn = (options: { title: string; message?: ReactNode; confirmLabel?: string }) => Promise<void>;
 
 const ConfirmContext = createContext<ConfirmFn | undefined>(undefined);
 
@@ -60,15 +63,17 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       {pending && (
         <div className="dialog-backdrop" onClick={() => close(false)}>
           <div className="dialog-card" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" onClick={(e) => e.stopPropagation()}>
-            <div className={`dialog-icon ${pending.danger ? 'dialog-icon-danger' : 'dialog-icon-info'}`}>{pending.danger ? '!' : '?'}</div>
+            <div className={`dialog-icon ${pending.danger || pending.hideCancel ? 'dialog-icon-danger' : 'dialog-icon-info'}`}>{pending.danger || pending.hideCancel ? '!' : '?'}</div>
             <h3 id="confirm-title" className="dialog-title">
               {pending.title}
             </h3>
             {pending.message && <p className="dialog-message">{pending.message}</p>}
             <div className="dialog-actions">
-              <button type="button" className="btn" onClick={() => close(false)}>
-                {pending.cancelLabel ?? 'Cancel'}
-              </button>
+              {!pending.hideCancel && (
+                <button type="button" className="btn" onClick={() => close(false)}>
+                  {pending.cancelLabel ?? 'Cancel'}
+                </button>
+              )}
               <button
                 ref={confirmBtnRef}
                 type="button"
@@ -89,4 +94,18 @@ export function useConfirm(): ConfirmFn {
   const ctx = useContext(ConfirmContext);
   if (!ctx) throw new Error('useConfirm must be used within ConfirmProvider');
   return ctx;
+}
+
+/**
+ * Popup that just tells the user something (an error they must notice, unlike a toast that fades):
+ * `const alert = useAlert(); await alert({ title: 'OCR scan failed', message: err.message })`.
+ */
+export function useAlert(): AlertFn {
+  const confirm = useConfirm();
+  return useCallback<AlertFn>(
+    async ({ title, message, confirmLabel }) => {
+      await confirm({ title, message, confirmLabel: confirmLabel ?? 'OK', hideCancel: true });
+    },
+    [confirm],
+  );
 }

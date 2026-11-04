@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
@@ -8,7 +8,6 @@ import { useAuth } from '@/lib/auth';
 import { formatDate } from '@/lib/date';
 import DatePicker from '@/components/DatePicker';
 import MultiSelectDropdown from '@/components/MultiSelectDropdown';
-import NumberInput from '@/components/NumberInput';
 
 interface DepartmentOption {
   id: string;
@@ -34,10 +33,9 @@ interface CreditCardOption {
   user: { id: string; name: string } | null;
 }
 
-// One row of the Settlement Allocation section below the Expense list - fixed
-// one row per Unit (RCTI/MNCTV/GTV), Unit/Product are readonly. Total is
-// computed client-side just for display; the server always recomputes it from
-// the picked Expenses' total * percentage (never trusts this back).
+// One Settlement Allocation row, built behind the scenes (no UI on this page) - fixed
+// one row per Unit (RCTI/MNCTV/GTV). The server always recomputes the amounts from
+// the picked Expenses' total * percentage (never trusts the client).
 // autoDescription tracks the last machine-generated description so edits to
 // Department/dates/card below can keep refreshing it, right up until the user
 // types their own - description !== autoDescription then means "hands off".
@@ -61,15 +59,6 @@ const PRODUCT_BY_UNIT_CODE: Record<string, string> = {
   MNCTV: 'RE101-05.002',
   GTV: 'RE101-05.003',
 };
-
-function AllocFieldLabel({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <label style={{ fontSize: 11, color: 'var(--muted)' }}>{label}</label>
-      {children}
-    </div>
-  );
-}
 
 interface GeneratedExpenseRow {
   id: string;
@@ -236,17 +225,6 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchDepartmentKey, genPaymentMethodGroup]);
 
-  // Sum of the Expenses the user has checked in the preview table - what each
-  // allocation row's Original/Unit/Total Price is a percentage of. Recomputed
-  // server-side too (SettlementsService.buildAllocationRow) - this is only for
-  // this page's live preview.
-  const selectedExpensesTotal = (previewResult?.expenses ?? [])
-    .filter((e) => selectedExpenseIds.has(e.id))
-    .reduce((sum, e) => sum + Number(e.amount), 0);
-
-  const updateAllocationRow = (key: string, patch: Partial<AllocationRow>) =>
-    setAllocationRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
-
   // One fixed row per Unit - Unit/Product are readonly, so there's nothing to
   // pick: the 3 rows always exist once an Expense is checked.
   const PRESET_UNIT_CODES = ['RCTI', 'MNCTV', 'GTV'];
@@ -318,23 +296,9 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genPaymentMethodGroup, genCreditCardId, searchDepartmentKey, genFromDate, genToDate, departmentOptions, creditCardOptions, ownDepartment?.id]);
 
-  // Percentage edits feed straight back into the description template too
-  // (the "(UNIT %)" tail), as long as the description is still auto-generated.
-  const updateAllocationPercentage = (key: string, percentage: string) =>
-    setAllocationRows((prev) =>
-      prev.map((r) => {
-        if (r.key !== key) return r;
-        if (r.description !== r.autoDescription) return { ...r, percentage };
-        const nextDescription = buildAllocationDescription(r.unitCode, percentage);
-        return { ...r, percentage, description: nextDescription, autoDescription: nextDescription };
-      }),
-    );
-
   const totalPercentage = allocationRows.reduce((sum, r) => sum + (Number(r.percentage) || 0), 0);
   const overAllocated = Math.round(totalPercentage * 100) / 100 > MAX_ALLOCATION_PERCENT;
   const overAllocatedMessage = `Total persentase ${Math.round(totalPercentage * 100) / 100}% - tidak boleh lebih dari ${MAX_ALLOCATION_PERCENT}%.`;
-
-  const allocationAmount = (row: AllocationRow) => (selectedExpensesTotal * (Number(row.percentage) || 0)) / 100;
 
   // Edit mode: load the draft settlement once and prefill every field from it -
   // Department/payment group (fixed), a date range widened to cover its
@@ -559,7 +523,7 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
       </div>
       <p style={{ color: 'var(--muted)', marginTop: -8, fontSize: 12 }}>
         {isEdit
-          ? 'Department and Metode Pembayaran are fixed. Widen the date range and click Search to find more Expenses, check/uncheck the ones to include, adjust the allocation, then click Save Changes.'
+          ? 'Department and Metode Pembayaran are fixed. Widen the date range and click Search to find more Expenses, check/uncheck the ones to include, then click Save Changes.'
           : 'Pick a Department and date range, click Search to list its already bank-matched Expenses, check the ones to include, then click Generate Settlement - each Expense is then approved per its Approval Level from inside the Settlement list.'}
       </p>
       {loadingExisting && <p style={{ fontSize: 13, color: 'var(--muted)' }}>Loading settlement...</p>}
@@ -727,72 +691,12 @@ export default function SettlementForm({ settlementId }: { settlementId?: string
                   </tbody>
                 </table>
 
-                {selectedExpenseIds.size > 0 && (
-                <div style={{ marginTop: 20 }}>
-                  <strong style={{ fontSize: 12 }}>Settlement Allocation</strong>
-                  {allocationRows.map((row) => {
-                    const amount = allocationAmount(row);
-                    return (
-                      <div
-                        key={row.key}
-                        style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginTop: 8 }}
-                      >
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
-                          <AllocFieldLabel label="Product">
-                            <input type="text" disabled value={PRODUCT_BY_UNIT_CODE[row.unitCode] ?? '-'} style={{ width: '100%' }} />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Unit">
-                            <input type="text" disabled value={row.unitCode} style={{ width: '100%' }} />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Persentase (%)">
-                            <NumberInput
-                              allowDecimals
-                              style={{ width: '100%' }}
-                              value={row.percentage}
-                              onChange={(v) => updateAllocationPercentage(row.key, v)}
-                            />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Currency">
-                            <input
-                              type="text"
-                              style={{ width: '100%' }}
-                              value={row.curr}
-                              onChange={(e) => updateAllocationRow(row.key, { curr: e.target.value })}
-                            />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Quantity">
-                            <NumberInput
-                              allowDecimals
-                              style={{ width: '100%' }}
-                              value={row.qty}
-                              onChange={(v) => updateAllocationRow(row.key, { qty: v })}
-                            />
-                          </AllocFieldLabel>
-                          <AllocFieldLabel label="Total">
-                            <input type="text" disabled value={formatCurrency(amount)} style={{ width: '100%' }} />
-                          </AllocFieldLabel>
-                        </div>
-
-                        <div style={{ marginTop: 8 }}>
-                          <AllocFieldLabel label="Description">
-                            <textarea
-                              rows={3}
-                              style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit' }}
-                              value={row.description}
-                              onChange={(e) => updateAllocationRow(row.key, { description: e.target.value })}
-                            />
-                          </AllocFieldLabel>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  <div
-                    style={{ marginTop: 8, fontSize: 12 }}
-                    className={overAllocated ? 'error-text' : undefined}
-                  >
-                    {overAllocated ? overAllocatedMessage : `Total persentase: ${Math.round(totalPercentage * 100) / 100}%`}
+                {/* Settlement Allocation has no UI here: its rows are built behind the scenes (one per Unit,
+                    default shares) and saved with the Settlement. Descriptions are edited in "Create Draft PR". */}
+                {overAllocated && (
+                  <div className="error-text" style={{ marginTop: 8 }}>
+                    {overAllocatedMessage}
                   </div>
-                </div>
                 )}
 
                 {isEdit ? (

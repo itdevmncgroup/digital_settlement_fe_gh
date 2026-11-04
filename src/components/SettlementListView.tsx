@@ -94,8 +94,8 @@ interface UnitOption {
   name: string;
 }
 
-// GET /settlements/:id/draft-pr/preview - same columns as the Settlement
-// Allocation section of the Settlement form.
+// GET /settlements/:id/draft-pr/preview - the Settlement's allocation rows (built behind the scenes
+// when it was created); only Description is editable here.
 interface DraftPrPreview {
   settlementNo: string;
   unit: UnitOption;
@@ -255,6 +255,8 @@ const [resendingId, setResendingId] = useState<string | null>(null);
   const [unitOptions, setUnitOptions] = useState<UnitOption[]>([]);
   const [draftPrUnitId, setDraftPrUnitId] = useState('');
   const [draftPrPreview, setDraftPrPreview] = useState<DraftPrPreview | null>(null);
+  // Description column of the preview, editable: allocation id -> text. Saved by the server when sending.
+  const [draftPrDescriptions, setDraftPrDescriptions] = useState<Record<string, string>>({});
   const [draftPrLoading, setDraftPrLoading] = useState(false);
   const [draftPrSending, setDraftPrSending] = useState(false);
   const [draftPrPdfLoading, setDraftPrPdfLoading] = useState(false);
@@ -457,7 +459,9 @@ const [resendingId, setResendingId] = useState<string | null>(null);
   const loadDraftPrPreview = async (settlementId: string, unitId: string) => {
     setDraftPrLoading(true);
     try {
-      setDraftPrPreview(await api.get<DraftPrPreview>(`/settlements/${settlementId}/draft-pr/preview?unitId=${unitId}`));
+      const preview = await api.get<DraftPrPreview>(`/settlements/${settlementId}/draft-pr/preview?unitId=${unitId}`);
+      setDraftPrPreview(preview);
+      setDraftPrDescriptions(Object.fromEntries(preview.rows.map((a) => [a.id, a.description ?? ''])));
     } catch (err) {
       setDraftPrPreview(null);
       setDraftPrError(err instanceof ApiError ? err.message : 'Failed to load preview');
@@ -511,7 +515,7 @@ const [resendingId, setResendingId] = useState<string | null>(null);
       // the same PDF as "Generate PDF" and sends it to Odoo as the attachment.
       const res = await postForm<{ odooSyncStatus: string; odooSyncError: string | null }>(
         `/settlements/${draftPrSettlement.id}/draft-pr/send`,
-        { unitId: draftPrUnitId },
+        { unitId: draftPrUnitId, descriptions: JSON.stringify(draftPrDescriptions) },
         draftPrStatement,
       );
       load();
@@ -899,7 +903,16 @@ const [resendingId, setResendingId] = useState<string | null>(null);
                       <td>{a.curr}</td>
                       <td>{Number(a.qty)}</td>
                       <td>{formatCurrency(a.total)}</td>
-                      <td>{a.description ?? '-'}</td>
+                      <td style={{ minWidth: 280 }}>
+                        <textarea
+                          rows={3}
+                          aria-label={`Description ${a.unitCode}`}
+                          style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit' }}
+                          disabled={draftPrSending}
+                          value={draftPrDescriptions[a.id] ?? ''}
+                          onChange={(e) => setDraftPrDescriptions((prev) => ({ ...prev, [a.id]: e.target.value }))}
+                        />
+                      </td>
                     </tr>
                   ))}
                   {draftPrPreview.rows.length === 0 && (

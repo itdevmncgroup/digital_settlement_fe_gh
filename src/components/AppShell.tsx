@@ -192,7 +192,7 @@ const NAV: NavGroup[] = [
     items: [
       {
         href: '/approvals',
-        label: 'APPROVAL',
+        label: 'Approval',
         icon: 'approval',
         hideIconWhenExpanded: true,
         roles: ['ADMINISTRATOR', 'MANAGEMENT'],
@@ -482,7 +482,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={item.href === activeHref ? 'active' : ''}
+                    className={`${item.hideIconWhenExpanded && !effectiveCollapsed ? 'nav-as-group-label ' : ''}${item.href === activeHref ? 'active' : ''}`.trim()}
                     title={effectiveCollapsed ? item.label : undefined}
                   >
                     {!(item.hideIconWhenExpanded && !effectiveCollapsed) && (

@@ -18,9 +18,10 @@ import FileOrCameraInput from '@/components/FileOrCameraInput';
 import SplashLoader from '@/components/SplashLoader';
 import { useToast } from '@/components/ToastProvider';
 import Modal from '@/components/Modal';
-import { useConfirm } from '@/components/ConfirmDialog';
+import { useAlert, useConfirm } from '@/components/ConfirmDialog';
 import ExpenseFromRequestModal from '@/components/ExpenseFromRequestModal';
 import { NavIcon } from '@/components/NavIcons';
+import { isExpenseEditable } from '@/lib/expenseEdit';
 
 const MATCHED_TXN_STATUSES = ['AUTO_MATCHED', 'MANUAL_MATCHED'];
 
@@ -102,7 +103,6 @@ function isSettlementSubmitted(row: { settlement: { status: string } | null }) {
 }
 
 // PENDING_SALES_ADMIN: raised by Corsec from an Expense Request, completed by a Sales Admin of its Department.
-const EDITABLE_STATUSES = ['DRAFT', 'PENDING_SALES_ADMIN', 'REJECTED', 'REVISION'];
 
 // Anything currently sitting with an approver - matches ApprovalStatus.PENDING
 // on the backend's ApprovalRequest for this Expense.
@@ -296,6 +296,7 @@ function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
   const [error, setError] = useState('');
   const toast = useToast();
   const confirm = useConfirm();
+  const alert = useAlert();
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [resendingId, setResendingId] = useState<string | null>(null);
@@ -752,7 +753,11 @@ function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
         expenseDate: !f.expenseDate && result.invoiceDate ? result.invoiceDate : f.expenseDate,
       }));
     } catch (err) {
-      if (ocrFile.current === file) setOcrWarnings([err instanceof ApiError ? err.message : `OCR scan failed for ${file.name} - enter invoice details manually.`]);
+      if (ocrFile.current === file) {
+        const message = err instanceof ApiError ? err.message : `OCR scan failed for ${file.name} - enter invoice details manually.`;
+        setOcrWarnings([message]);
+        void alert({ title: 'OCR scan failed', message: `${message} You can enter the invoice details manually.` });
+      }
     } finally {
       if (ocrFile.current === file || ocrFile.current === null) setOcrScanning(false);
     }
@@ -1715,7 +1720,7 @@ function ExpensesPageInner({ scope }: { scope: 'entertainment' | 'flower' }) {
           <tbody>
             {pagination.pageRows.map((r) => {
               const canEdit =
-                EDITABLE_STATUSES.includes(r.status) &&
+                isExpenseEditable(r.status) &&
                 (r.salesId === user?.id || canActOnBehalf || (r.status === 'PENDING_SALES_ADMIN' && hasRole('SALES_ADMIN')));
               const canDeleteDraft =
                 r.status === 'DRAFT' && hasPermission('expense.draft.delete.own') && (r.createdById ?? r.salesId) === user?.id;

@@ -11,6 +11,7 @@ import FileThumb from '@/components/FileThumb';
 import FileOrCameraInput from '@/components/FileOrCameraInput';
 import LocalFileThumb from '@/components/LocalFileThumb';
 import { formatCurrency, SkeletonList, StatusBadge } from '@/lib/mobileUi';
+import { isExpenseEditable } from '@/lib/expenseEdit';
 import { MATCH_FIRST_MESSAGE, mustMatchBeforeApprove } from '@/lib/expenseApproval';
 
 interface InvoiceFile {
@@ -82,8 +83,6 @@ interface ApprovalDetail {
 }
 
 const MATCHED_TXN_STATUSES = ['AUTO_MATCHED', 'MANUAL_MATCHED'];
-// Same lock as the desktop detail page: everything else (in-flight approval statuses included) stays editable.
-const LOCKED_STATUSES = ['APPROVED', 'REJECTED', 'SETTLED'];
 const INVOICE_ACCEPT = 'image/jpeg,image/png,image/webp,application/pdf';
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -179,7 +178,7 @@ function MobileExpenseDetail() {
   // Same access rules as the desktop page; the backend is authoritative and 403s anything else.
   const isAdmin = hasRole('ADMINISTRATOR');
   const isOwner = expense?.salesId === user?.id;
-  const locked = !expense || LOCKED_STATUSES.includes(expense.status);
+  const locked = !expense || !isExpenseEditable(expense.status);
   const completesPendingSalesAdmin = expense?.status === 'PENDING_SALES_ADMIN' && hasRole('SALES_ADMIN');
   const canEditFields =
     !locked && (isOwner || isAdmin || completesPendingSalesAdmin || hasPermission('expense.edit.all', 'expense.edit.owndept'));
